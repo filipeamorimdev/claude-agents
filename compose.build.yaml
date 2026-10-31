@@ -1,0 +1,14 @@
+# Build the images from this checkout instead of pulling them from GHCR:
+#   docker compose -f compose.yaml -f compose.build.yaml up -d --build
+# (install.sh sets COMPOSE_FILE in .env so plain `docker compose` does this.)
+services:
+  claude-agents:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    image: claude-agents:local
+  init:
+    image: claude-agents:local
+  firewall:
+    build: firewall
+    image: claude-agents-firewall:local

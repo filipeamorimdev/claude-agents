@@ -19,7 +19,7 @@ const UI_PORT = Number(process.env.UI_PORT || 8090);
 const log = (name, msg) => console.log(`${new Date().toISOString()} [${name}] ${msg}`);
 
 if (!process.env.CLAUDE_CODE_OAUTH_TOKEN && !process.env.ANTHROPIC_API_KEY) {
-  console.error("No credentials: set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY (run install.sh).");
+  console.error("No credentials: set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the stack's variables.");
   process.exit(1);
 }
 
@@ -57,7 +57,7 @@ if (!store.getMeta("seeded")) {
   store.setMeta("seeded", new Date().toISOString());
   lastEvent = 0; // show the imports in the log
 }
-// The Team chat relies on agent-architect: add it once if this install never had it
+// Creating agents from the chat relies on agent-architect: add it once if this install never had it
 // (e.g. a custom agents.mjs without it). Deleting it later is respected.
 if (!store.getMeta("architect_seeded")) {
   if (!store.get("agent-architect")) {
@@ -77,10 +77,11 @@ let lastVersion = -1;
 async function scheduledRun(name) {
   bus.emit("running", { agent: name, running: true });
   try {
+    const started = new Date().toISOString();
     const r = await engine.runAgent(name, { trigger: "schedule" });
     if (r.result) {
       bus.emit("message", store.addMessage(name, "agent", name, r.result, {
-        meta: { model: r.model, effort: r.effort, turns: r.turns, ok: r.ok, task: true, scheduled: true },
+        meta: { model: r.model, effort: r.effort, turns: r.turns, ok: r.ok, task: true, scheduled: true, proposals: store.proposalIdsSince(name, started) },
       }));
     }
   } finally {

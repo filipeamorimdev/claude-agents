@@ -1,16 +1,86 @@
-# Claude agents: generated settings live in .env (created by install.sh).
-# Start/stop manually with:  docker compose up -d   /   docker compose down
-# The browser container only starts when COMPOSE_PROFILES includes "browser".
+# Claude agents. Every setting is a variable: set them in your Docker UI's stack
+# environment editor (OMV Compose, Portainer, Dockge...), or in a .env file next to this one
+# for the CLI (install.sh writes it). Changing a variable = redeploy the stack; data is kept.
+#
+# Required
+#   DATA_DIR                  absolute host folder for workspaces, logs, browser logins and config
+#   UI_PASSWORD               chat UI login
+#   CLAUDE_CODE_OAUTH_TOKEN   from `claude setup-token` (Pro/Max plan)   } set one
+#   ANTHROPIC_API_KEY         from console.anthropic.com (billed per token) }
+#
+# Optional (default)
+#   TZ (UTC)                  timezone for schedules
+#   UI_PORT (8090)            UI_BIND (0.0.0.0)      where the chat UI is published
+#   AGENT_UID / AGENT_GID (1000)                     owner of the agents' files on the host
+#   FIREWALL (on)             "off" lets the agents reach your LAN (only for hosts without iptables)
+#   FIREWALL_ALLOW            LAN exceptions, e.g. "192.168.1.50:8123,192.168.1.60"
+#   AGENTS_SUBNET (172.30.0.0/24)                    change if it clashes with another network
+#   AGENTS_CPUS (1.5)  AGENTS_MEMORY (1g)  BROWSER_CPUS (2.0)  BROWSER_MEMORY (1g)
+#   HA_TOKEN                  example token for an MCP server in config/mcp-servers.mjs
+#   AGENTS_IMAGE / FIREWALL_IMAGE / BROWSER_IMAGE    override the published images
+#
+# Browser agent (only starts when COMPOSE_PROFILES=browser)
+#   BROWSER_SECRETS           site logins as NAME=value pairs separated by ";",
+#                             e.g. "OLX_EMAIL=me@example.com;OLX_PASSWORD=..."
+#   BROWSER_ALLOWED_ORIGINS (https://www.olx.pt)     websites it may open, separated by ";"
+#
+# Agent and MCP server config lives in DATA_DIR/config (created with defaults on first start).
+
+x-hardening: &hardening
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
 
 services:
+  # One-shot: creates the data folders with the right owners and the default config.
+  init:
+    image: ${AGENTS_IMAGE:-ghcr.io/filipeamorimdev/claude-agents:latest}
+    user: "0:0"
+    network_mode: none
+    restart: "no"
+    entrypoint: ["/bin/sh", "/app/init.sh"]
+    environment:
+      AGENT_UID: ${AGENT_UID:-1000}
+      AGENT_GID: ${AGENT_GID:-1000}
+    volumes:
+      - ${DATA_DIR:?set DATA_DIR to an absolute folder on the host}:/target
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt:
+      - no-new-privileges:true
+
+  # Keeps the agents' network away from your LAN and this host (iptables rules on the host).
+  firewall:
+    image: ${FIREWALL_IMAGE:-ghcr.io/filipeamorimdev/claude-agents-firewall:latest}
+    container_name: claude-agents-firewall
+    restart: unless-stopped
+    network_mode: host
+    read_only: true
+    tmpfs:
+      - /tmp:size=1m
+    environment:
+      FIREWALL: ${FIREWALL:-on}
+      FIREWALL_ALLOW: ${FIREWALL_ALLOW:-}
+      AGENTS_SUBNET: ${AGENTS_SUBNET:-172.30.0.0/24}
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_RAW]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
   claude-agents:
-    build:
-      context: .
-      dockerfile: app/Dockerfile
-    image: claude-agents:local
+    image: ${AGENTS_IMAGE:-ghcr.io/filipeamorimdev/claude-agents:latest}
     container_name: claude-agents
     restart: unless-stopped
-    user: "${AGENT_UID:?run install.sh first}:${AGENT_GID:?run install.sh first}"
+    user: "${AGENT_UID:-1000}:${AGENT_GID:-1000}"
+    depends_on:
+      init: { condition: service_completed_successfully }
+      firewall: { condition: service_healthy }
     environment:
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -18,21 +88,21 @@ services:
       DATA_DIR: /data
       HOME: /data/home
       DISABLE_AUTOUPDATER: "1"
-      UI_PASSWORD: ${UI_PASSWORD:-}     # chat UI login; empty = UI off
+      UI_PASSWORD: ${UI_PASSWORD:?set UI_PASSWORD (the chat UI login)}
       UI_PORT: "8090"
+      # Variables used in config/mcp-servers.mjs must be listed here to reach the container.
+      HA_TOKEN: ${HA_TOKEN:-}
     ports:
       # The chat UI: the only port this stack publishes. Reach it on your LAN or over your VPN.
       - "${UI_BIND:-0.0.0.0}:${UI_PORT:-8090}:8090"
     volumes:
-      - ./config:/app/config:ro                  # seed agents + MCP server registry (human-controlled)
-      - ${DATA_DIR:?run install.sh first}/agents:/data
+      - ${DATA_DIR}/config:/app/config:ro        # seed agents + MCP server registry (human-controlled)
+      - ${DATA_DIR}/agents:/data
     # --- hardening ---
+    <<: *hardening
     read_only: true
     tmpfs:
       - /tmp:rw,exec,nosuid,size=256m
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
     networks: [agents]
     dns: [1.1.1.1, 9.9.9.9]          # public DNS: the firewall blocks your LAN, including local resolvers
     deploy:
@@ -47,16 +117,32 @@ services:
 
   browser-admaster:
     profiles: [browser]
-    image: mcr.microsoft.com/playwright/mcp
+    # Pinned: the entrypoint and flags below depend on this image's layout. Bump on purpose.
+    image: ${BROWSER_IMAGE:-mcr.microsoft.com/playwright/mcp:v0.0.83}
     container_name: browser-admaster
     restart: unless-stopped
-    init: true
-    user: "${AGENT_UID}:${AGENT_GID}"
+    user: "${AGENT_UID:-1000}:${AGENT_GID:-1000}"
+    depends_on:
+      init: { condition: service_completed_successfully }
+      firewall: { condition: service_healthy }
     environment:
       HOME: /tmp
+      BROWSER_SECRETS: ${BROWSER_SECRETS:-}
     shm_size: 1gb
+    # Writes BROWSER_SECRETS to a dotenv file in memory, then starts the MCP server with it.
+    entrypoint:
+      - /usr/bin/tini
+      - -s
+      - --
+      - /bin/sh
+      - -c
+      - |
+        umask 077
+        printf '%s\n' "$$BROWSER_SECRETS" | tr ';' '\n' > /run/browser-secrets/secrets.env
+        unset BROWSER_SECRETS
+        exec node /app/cli.js "$$@"
+      - sh
     command:
-      - /app/cli.js
       - --headless
       - --browser=chromium
       - --no-sandbox
@@ -65,15 +151,14 @@ services:
       - --allowed-hosts=*
       - --user-data-dir=/profile
       - --output-dir=/shots
-      - --secrets=/run/secrets/admaster
+      - --secrets=/run/browser-secrets/secrets.env
       - --allowed-origins=${BROWSER_ALLOWED_ORIGINS:-https://www.olx.pt}
-    secrets: [admaster]
+    tmpfs:
+      - /run/browser-secrets:size=64k,mode=0700,uid=${AGENT_UID:-1000},gid=${AGENT_GID:-1000}
     volumes:
       - ${DATA_DIR}/browsers/admaster:/profile
       - ${DATA_DIR}/agents/workspaces/ad-master/shots:/shots
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
+    <<: *hardening
     networks: [agents]
     dns: [1.1.1.1, 9.9.9.9]
     # no "ports:": only reachable from claude-agents on the internal network
@@ -83,10 +168,6 @@ services:
           cpus: "${BROWSER_CPUS:-2.0}"
           memory: ${BROWSER_MEMORY:-1g}
           pids: 512
-
-secrets:
-  admaster:
-    file: ./secrets/admaster.env
 
 networks:
   agents:

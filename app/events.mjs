@@ -1,4 +1,4 @@
-// One-line, human-readable descriptions of audit events, used for docker logs and the Team feed.
+// One-line, human-readable descriptions of audit events, used for docker logs.
 
 const one = (s, n = 300) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
 const tools = (t) => (t?.length ? t.join(", ") : "none");

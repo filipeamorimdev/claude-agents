@@ -1,4 +1,4 @@
-// MCP servers that agents may use. install.sh copies this to config/mcp-servers.mjs.
+// MCP servers that agents may use. Copied to DATA_DIR/config/mcp-servers.mjs on first start.
 //
 // This list is human-controlled: agents can only reference servers defined HERE
 // (an agent can never add a new server URL or command). After editing:
@@ -14,7 +14,8 @@ export const mcpServers = {
     config: { type: "http", url: "http://browser-admaster:8931/mcp" },
   },
 
-  // Example: Home Assistant (also add its IP:8123 to /etc/claude-agents/firewall-allow)
+  // Example: Home Assistant. Also add its IP:8123 to FIREWALL_ALLOW, and set HA_TOKEN in the
+  // stack's variables (a variable only reaches the container if compose.yaml lists it).
   // homeassistant: {
   //   description: "Read and control Home Assistant entities",
   //   config: {

@@ -79,7 +79,6 @@ button { cursor: pointer; }
 .avatar.sm { width: 32px; height: 32px; border-radius: 10px; font-size: 13px; }
 .avatar.xs { width: 24px; height: 24px; border-radius: 8px; font-size: 11px; }
 .avatar.you { background: var(--cobalt); }
-.avatar.team { background: var(--ink); color: var(--surface); }
 .avatar.approvals { background: var(--amber); color: #1D1500; }
 .members { display: flex; flex-direction: column; gap: 2px; max-height: 340px; overflow-y: auto; }
 .members label { display: grid; grid-template-columns: auto auto 1fr; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 10px; cursor: pointer; }
@@ -144,19 +143,6 @@ button { cursor: pointer; }
   @keyframes blink { 40% { opacity: 1; transform: translateY(-2px); } }
 }
 
-/* team relay: the one bold element */
-.relay { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-self: stretch; max-width: 720px; }
-.relay .rail { display: flex; flex-direction: column; align-items: center; width: 32px; }
-.relay .rail .wire { width: 3px; flex: 1; min-height: 14px; border-radius: 2px; background: linear-gradient(var(--from), var(--to)); margin: 3px 0; }
-.relay .body { background: var(--surface); border-radius: var(--radius-bubble); box-shadow: var(--shadow); padding: 9px 13px; min-width: 0; }
-.relay .route { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
-.relay .route b { color: var(--from); } .relay .route em { font-style: normal; color: var(--to); }
-.relay .stamp { display: block; text-align: right; font-size: 11.5px; color: var(--muted); margin-top: 4px; }
-.event { align-self: center; display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); background: var(--surface); border-radius: 999px; padding: 4px 6px 4px 12px; box-shadow: var(--shadow); max-width: 100%; }
-.event span { overflow: hidden; text-overflow: ellipsis; }
-.event.attn { background: var(--amber-soft); color: var(--ink); }
-.event .btn { padding: 3px 10px; font-size: 13px; }
-
 /* composer */
 .composer { background: var(--surface); border-top: 1px solid var(--line); padding: 10px clamp(12px, 4vw, 48px) calc(10px + env(safe-area-inset-bottom)); }
 .composer-inner { max-width: 820px; margin: 0 auto; }
@@ -173,8 +159,6 @@ button { cursor: pointer; }
 .pill select { appearance: none; border: 0; background: transparent; color: var(--ink); font-weight: 600; padding-right: 14px; cursor: pointer; }
 .pill::after { content: ""; position: absolute; right: 10px; top: 50%; width: 6px; height: 6px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: translateY(-70%) rotate(45deg); pointer-events: none; }
 .settings .hint { color: var(--muted); font-size: 12.5px; margin-left: auto; }
-.mentions { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
-.mentions button { border: 1px solid var(--line); background: var(--surface-2); border-radius: 999px; padding: 3px 10px 3px 4px; font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
 
 /* @agent / slash-command suggestions */
 .composer-inner { position: relative; }
@@ -189,6 +173,15 @@ button { cursor: pointer; }
 .suggest .avatar { grid-row: span 2; }
 .local { align-self: stretch; max-width: 640px; background: var(--surface-2); border: 1px dashed var(--line); border-radius: var(--radius-bubble); padding: 10px 14px; }
 .local .meta { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+
+/* a suggestion waiting for you, shown under the reply that made it */
+.ask { align-self: flex-start; margin-left: 40px; width: min(520px, calc(100% - 40px)); background: var(--surface); border-radius: 14px; box-shadow: var(--shadow); padding: 10px 14px; border-left: 4px solid var(--amber); }
+.ask.done { border-left-color: var(--line); }
+.ask-title { font-weight: 650; }
+.ask-line { color: var(--muted); font-size: 13.5px; margin-top: 2px; }
+.ask .actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+.ask-status { font-size: 13.5px; font-weight: 600; color: var(--muted); }
+.ask-status.approved { color: #2BB673; }
 
 /* approvals */
 .cards { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
@@ -263,7 +256,6 @@ details.prompt pre { white-space: pre-wrap; background: var(--surface-2); border
     <footer class="composer" id="composer" hidden>
       <div class="composer-inner">
         <div class="suggest" id="suggest" role="listbox" aria-label="Suggestions" hidden></div>
-        <div class="mentions" id="mentions" hidden></div>
         <div class="attach-list" id="attach-list" hidden></div>
         <div class="compose-row">
           <button class="icon-btn" id="attach" title="Attach photos" aria-label="Attach photos">
@@ -392,8 +384,8 @@ function md(src) {
 
 // ---------------- state ----------------
 const S = {
-  agents: [], groups: [], models: [], efforts: {}, proposals: 0, team: null,
-  view: null,            // { kind: "agent"|"group"|"team"|"approvals", name? (agent), id? (group) }
+  agents: [], groups: [], models: [], efforts: {}, proposals: 0,
+  view: null,            // { kind: "agent"|"group"|"approvals", name? (agent), id? (group) }
   messages: [], attachments: [], progress: {}, running: new Set(), live: new Set(), filter: "",
 };
 const MODEL_LABEL = { haiku: "Haiku", sonnet: "Sonnet", opus: "Opus" };
@@ -401,7 +393,7 @@ const EFFORT_LABEL = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra
 
 async function loadState() {
   const st = await api("GET", "/api/state");
-  Object.assign(S, { agents: st.agents, groups: st.groups, models: st.models, efforts: st.efforts, proposals: st.proposals, team: st.team });
+  Object.assign(S, { agents: st.agents, groups: st.groups, models: st.models, efforts: st.efforts, proposals: st.proposals });
   // live updates (SSE) win over the snapshot, which can lag a run by a moment
   S.running = new Set([...st.agents.filter((a) => a.running).map((a) => a.name), ...S.live]);
   renderList();
@@ -422,11 +414,6 @@ function renderList() {
   const item = (key, av, title, preview, when, extra, onclick, off) => h("button", {
     class: `row${off ? " off" : ""}`, "aria-current": cur && key === `${cur.kind}:${cur.name ?? cur.id ?? ""}` ? "true" : "false", onclick,
   }, av, h("div", { style: "min-width:0" }, h("div", { class: "name" }, h("span", {}, title), extra), h("div", { class: "preview" }, preview)), when);
-
-  const teamAv = h("div", { class: "avatar team", "aria-hidden": "true" });
-  teamAv.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM2 20c0-3 2.7-5 6-5s6 2 6 5M14 15.3c.6-.2 1.3-.3 2-.3 3.3 0 6 2 6 5"/></svg>';
-  list.append(item("team:", teamAv, "Team", S.team ? previewOf(S.team) : "Everything your agents do together",
-    h("div", { class: "when" }, S.team ? whenOf(S.team.created_at) : ""), null, () => open({ kind: "team" })));
 
   list.append(item("approvals:", h("div", { class: "avatar approvals", "aria-hidden": "true" }, "✓"),
     "Approvals", S.proposals ? `${S.proposals} waiting for you` : "Nothing to review",
@@ -451,7 +438,7 @@ function renderList() {
       () => open({ kind: "agent", name: a.name }), !a.enabled));
   }
 }
-const previewOf = (m) => `${m.role === "human" ? "You: " : m.role === "agent" && (m.chat === "team" || m.chat.startsWith("group:")) ? `${m.author}: ` : ""}${(m.text || (m.attachments?.length ? "Photo" : "")).replace(/[#*`|]/g, "").replace(/\s+/g, " ").slice(0, 90)}`;
+const previewOf = (m) => `${m.role === "human" ? "You: " : m.role === "agent" && m.chat.startsWith("group:") ? `${m.author}: ` : ""}${(m.text || (m.attachments?.length ? "Photo" : "")).replace(/[#*`|]/g, "").replace(/\s+/g, " ").slice(0, 90)}`;
 
 // ---------------- views ----------------
 async function open(view) {
@@ -462,15 +449,21 @@ async function open(view) {
   $("#composer").hidden = view.kind === "approvals";
   $("#settings").hidden = view.kind !== "agent";
   $("#attach").hidden = view.kind !== "agent";
-  $("#mentions").hidden = view.kind !== "team";
-  $("#text").placeholder = view.kind === "team" ? "@agent-name ask something, or /help"
-    : view.kind === "agent" ? `Message ${view.name}, or /help` : view.kind === "group" ? `Message everyone in ${curGroup()?.name}, or /help` : "";
+  $("#text").placeholder = view.kind === "agent" ? `Message ${view.name}, or /help` : view.kind === "group" ? `Message everyone in ${curGroup()?.name}, or /help` : "";
   closeSuggest();
   if (view.kind === "agent") { fillSettings(); const r = await api("GET", `/api/chats/${view.name}/messages`); S.messages = r.messages; renderMessages(); }
   if (view.kind === "group") { const r = await api("GET", `/api/groups/${view.id}/messages`); S.messages = r.messages; renderMessages(); }
-  if (view.kind === "team") { renderMentions(); const r = await api("GET", "/api/team"); renderTeam(r.items); }
   if (view.kind === "approvals") renderApprovals();
   if (view.kind !== "approvals" && matchMedia("(min-width: 761px)").matches) $("#text").focus();
+}
+
+// On a wide screen, open the chat with the latest message (or Approvals); on a phone, show the list.
+function openDefault() {
+  if (!matchMedia("(min-width: 761px)").matches) { $("#app").classList.remove("in-chat"); S.view = null; renderList(); return; }
+  const latest = [...S.groups.map((g) => ({ at: g.last?.created_at ?? "", view: { kind: "group", id: g.id } })),
+    ...S.agents.map((a) => ({ at: a.last?.created_at ?? "", view: { kind: "agent", name: a.name } }))]
+    .sort((x, y) => y.at.localeCompare(x.at))[0];
+  open(latest?.view ?? { kind: "approvals" });
 }
 
 function renderHead() {
@@ -493,8 +486,6 @@ function renderHead() {
       h("button", { class: "who", onclick: () => openGroupDrawer(g), "aria-label": `${g.name} details` },
         h("div", { class: "title" }, g.name),
         h("div", { class: "sub" }, busy.length ? `${busy[0]} is ${S.progress[busy[0]] || "thinking"}` : g.members.join(", "))));
-  } else if (v.kind === "team") {
-    head.append(back, h("div", { class: "who" }, h("div", { class: "title" }, "Team"), h("div", { class: "sub" }, "New agents, approvals and agents asking each other for help")));
   } else {
     head.append(back, h("div", { class: "who" }, h("div", { class: "title" }, "Approvals"), h("div", { class: "sub" }, "Agents can suggest changes. Nothing applies until you approve it.")));
   }
@@ -518,7 +509,8 @@ function messageNode(m) {
   const how = !mine && m.meta?.model
     ? h("span", {}, `${MODEL_LABEL[m.meta.model] ?? m.meta.model}, ${EFFORT_LABEL[m.meta.effort]?.toLowerCase() ?? m.meta.effort}${m.meta.turns ? `, ${m.meta.turns} turns` : ""}`) : null;
   bubble.append(h("div", { class: "meta" }, how, h("time", {}, timeOf(m.created_at))));
-  return h("div", { class: `msg${mine ? " you" : ""}` }, mine ? null : avatar(m.author, "sm"), bubble);
+  const node = h("div", { class: `msg${mine ? " you" : ""}` }, mine ? null : avatar(m.author, "sm"), bubble);
+  return m.proposals?.length ? [node, ...m.proposals.map(proposalCard)] : node;
 }
 
 function withDays(items, dateKey, render) {
@@ -526,7 +518,7 @@ function withDays(items, dateKey, render) {
   for (const it of items) {
     const d = dayOf(it[dateKey]);
     if (d !== lastDay) { nodes.push(h("div", { class: "day" }, d)); lastDay = d; }
-    nodes.push(render(it));
+    nodes.push(...[render(it)].flat());
   }
   return nodes;
 }
@@ -547,8 +539,8 @@ function renderMessages() {
 function renderTyping() {
   $("#typing")?.remove();
   const name = S.view?.kind === "agent" ? S.view.name : null;
-  const teamRunning = S.view?.kind === "team" ? [...S.running] : S.view?.kind === "group" ? (curGroup()?.members ?? []).filter((m) => S.running.has(m)) : [];
-  const who = name && S.running.has(name) ? [name] : teamRunning;
+  const groupRunning = S.view?.kind === "group" ? (curGroup()?.members ?? []).filter((m) => S.running.has(m)) : [];
+  const who = name && S.running.has(name) ? [name] : groupRunning;
   if (!who.length) return;
   $("#stream").append(h("div", { class: "typing", id: "typing", style: `--hue:${hueOf(who[0])}` },
     h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")),
@@ -570,8 +562,6 @@ async function send() {
       });
       const a = S.agents.find((x) => x.name === v.name);
       a.model = $("#model").value; a.effort = $("#effort").value;
-    } else if (v.kind === "team") {
-      await api("POST", "/api/team/messages", { text });
     } else if (v.kind === "group") {
       await api("POST", `/api/groups/${v.id}/messages`, { text });
     }
@@ -588,7 +578,6 @@ async function runNow() {
 const COMMANDS = [
   { name: "help", desc: "List the commands you can use" },
   { name: "agents", desc: "List your agents and what they do" },
-  { name: "team", desc: "Open the Team chat" },
   { name: "approvals", desc: "Open the suggestions waiting for you" },
   { name: "new", desc: "Start a new conversation (the agent forgets this chat)", in: "agent" },
   { name: "run", desc: "Run the agent's scheduled task now", in: "agent" },
@@ -600,30 +589,25 @@ const commandsHere = () => COMMANDS.filter((c) => !c.in || c.in === S.view?.kind
 // A note shown only in this browser, gone when you leave the chat.
 function showLocal(text) {
   const m = { role: "local", text, created_at: new Date().toISOString() };
-  if (S.view.kind === "agent" || S.view.kind === "group") { S.messages.push(m); renderMessages(); return; }
-  $("#stream .empty")?.remove(); $("#typing")?.remove();
-  $("#stream").append(messageNode(m)); renderTyping(); scrollDown();
+  S.messages.push(m); renderMessages();
 }
 
 function helpText() {
   const v = S.view;
   const out = ["# Commands", ...commandsHere().map((c) => `- \`/${c.name}${c.arg ? ` ${c.arg}` : ""}\` ${c.desc}`)];
-  if (v.kind === "team") {
-    const eg = S.agents.find((a) => a.name === "agent-architect" && a.enabled) ? "`@agent-architect create an agent that…`" : "`@agent-name …`";
-    out.push("", "# Ask an agent", `Type \`@\` and pick an agent, then your request, e.g. ${eg}. The answer is posted here.`,
-      "", "Open an agent's own chat for `/new`, `/run`, `/model` and `/effort`.");
-  } else if (v.kind === "group") {
+  if (v.kind === "group") {
     out.push("", "# Talk to the group", `Everyone here gets every message and answers in turn: ${curGroup()?.members.join(", ")}.`,
       "", "Tap the group name to add or remove agents. Use the button next to “Agents” to create another group.");
   } else {
     out.push("", `# Talk to ${v.name}`, "Just type. You can also attach or paste photos.");
   }
-  out.push("", "Agents reply in the language you write in.");
+  out.push("", "Type `@` to mention an agent. When an agent suggests a new agent or a change, Approve and Reject buttons appear under its reply.",
+    "", "Agents reply in the language you write in.");
   return out.join("\n");
 }
 
 function agentsText() {
-  if (!S.agents.length) return "You have no agents yet. Ask `@agent-architect` in Team to create one.";
+  if (!S.agents.length) return "You have no agents yet. Ask `agent-architect` to create one.";
   return ["# Your agents", ...S.agents.map((a) =>
     `- **${a.name}**${a.enabled ? "" : " (off)"}: ${a.description || "No description"}. ${cronText(a.schedule)}.`)].join("\n");
 }
@@ -648,7 +632,6 @@ async function runCommand(text) {
   switch (cmd.name) {
     case "help": return showLocal(helpText());
     case "agents": return showLocal(agentsText());
-    case "team": return open({ kind: "team" });
     case "approvals": return open({ kind: "approvals" });
     case "run": return runNow();
     case "new": try { await api("POST", `/api/agents/${a.name}/reset`); } catch (e) { toast(e.message); } return;
@@ -656,7 +639,7 @@ async function runCommand(text) {
 }
 
 // ---------------- @agent / command suggestions ----------------
-// What to suggest for the text before the caret: "/cmd", "/model x", or "@agent" (Team only).
+// What to suggest for the text before the caret: "/cmd", "/model x", or "@agent".
 function suggestionsAtCaret() {
   const t = $("#text"), before = t.value.slice(0, t.selectionStart), v = S.view?.kind;
   if (!v || v === "approvals" || t.selectionStart !== t.selectionEnd) return null;
@@ -672,8 +655,8 @@ function suggestionsAtCaret() {
     return { title: "Commands", from: 0, items: commandsHere().filter((c) => c.name.startsWith(q)).map((c) => ({
       label: `/${c.name}`, hint: c.arg, icon: "/", desc: c.desc, insert: c.arg ? `/${c.name} ` : `/${c.name}`, submit: !c.arg })) };
   }
-  if (v === "team" && (m = before.match(/(^|\s)@([a-z0-9-]*)$/i))) {
-    const q = m[2].toLowerCase(), on = S.agents.filter((a) => a.enabled);
+  if ((m = before.match(/(^|\s)@([a-z0-9-]*)$/i))) {
+    const q = m[2].toLowerCase(), on = S.agents.filter((a) => a.enabled && a.name !== S.view.name);
     const ranked = [...on.filter((a) => a.name.startsWith(q)), ...on.filter((a) => !a.name.startsWith(q) && a.name.includes(q))];
     return { title: "Agents", from: before.length - m[2].length - 1, empty: q ? `No agent matches “@${q}”` : "No agents are turned on",
       items: ranked.map((a) => ({ label: `@${a.name}`, agent: a.name, desc: a.description || cronText(a.schedule), insert: `@${a.name} ` })) };
@@ -733,57 +716,31 @@ function renderAttachments() {
     h("button", { "aria-label": "Remove photo", onclick: () => { S.attachments.splice(i, 1); renderAttachments(); updateSend(); } }, "×"))));
 }
 
-// ---------------- team ----------------
-function renderMentions() {
-  $("#mentions").replaceChildren(...S.agents.filter((a) => a.enabled).map((a) => h("button", {
-    onclick: () => { const t = $("#text"); t.value = `@${a.name} ${t.value.replace(/^@[a-z0-9-]+\s*/, "")}`; t.focus(); updateSend(); },
-  }, avatar(a.name, "xs"), a.name)));
+// ---------------- suggestions under a reply ----------------
+function proposalCard(p) {
+  const done = p.status !== "open";
+  return h("div", { class: `ask${done ? " done" : ""}` },
+    h("div", { class: "ask-title" }, p.kind === "create" ? `New agent: ${p.agent}` : `Change ${p.agent}${p.changes.length ? `: ${p.changes.join(", ")}` : ""}`),
+    p.description ? h("div", { class: "ask-line" }, p.description) : null,
+    h("div", { class: "ask-line" }, `${cronText(p.schedule)} · ${p.tools.length ? p.tools.map(toolLabel).join(", ") : "No tools"}`),
+    h("div", { class: "actions" }, done
+      ? h("span", { class: `ask-status ${p.status}` }, p.status === "approved" ? "✓ Approved" : "Rejected")
+      : [h("button", { class: "btn", onclick: () => open({ kind: "approvals" }) }, "Details"),
+        h("button", { class: "btn danger", onclick: (e) => decideInline(p, "reject", e.target) }, "Reject"),
+        h("button", { class: "btn primary", onclick: (e) => decideInline(p, "approve", e.target) }, "Approve")]));
 }
-
-const who = (actor) => /^human/.test(actor) ? "You" : actor.split(/[: ]/)[0];
-function eventText(e) {
-  const d = e.details ?? {}, by = who(e.actor);
-  switch (e.action) {
-    case "create": return /approved/.test(e.actor) ? `${e.agent} joined the team` : `${by} added ${e.agent}`;
-    case "update": return `${by} updated ${e.agent}`;
-    case "settings": return `${e.agent} now uses ${MODEL_LABEL[d.model?.to ?? ""] ?? "its model"}${d.effort ? `, ${EFFORT_LABEL[d.effort.to]?.toLowerCase()} effort` : ""}`.replace(/its model, /, "");
-    case "propose-create": return `${by} suggested a new agent: ${e.agent}`;
-    case "propose-update": return `${by} suggested changes to ${e.agent}`;
-    case "approve": return `${by} approved ${e.agent}`;
-    case "reject": return `${by} rejected the suggestion for ${e.agent}`;
-    case "enable": return `${by} turned on ${e.agent}`;
-    case "disable": return `${by} turned off ${e.agent}`;
-    case "delete": return `${by} removed ${e.agent}`;
-    case "group-create": return `${by} created the group ${d.name} with ${d.members?.join(", ")}`;
-    case "group-update": return `${by} updated the group ${d.name}`;
-    case "group-delete": return `${by} deleted the group ${d.name}`;
-    default: return e.text ?? `${by} ${e.action} ${e.agent ?? ""}`;
-  }
+async function decideInline(p, action, btn) {
+  btn.disabled = true;
+  try {
+    await api("POST", `/api/proposals/${p.id}/${action}`);
+    toast(action === "approve" ? (p.kind === "create" ? `${p.agent} created` : `${p.agent} updated`) : "Rejected");
+    setProposalStatus(p.id, action === "approve" ? "approved" : "rejected"); loadState();
+  } catch (e) { toast(e.message); btn.disabled = false; }
 }
-function teamNode(it) {
-  if (it.kind === "message") return messageNode({ ...it, created_at: it.at });
-  if (it.action === "ask" || it.action === "reply") {
-    const from = it.actor, to = it.agent;
-    return h("div", { class: `relay${it.action === "reply" ? " reply" : ""}`, style: `--from:${hueOf(from)};--to:${hueOf(to)}` },
-      h("div", { class: "rail", "aria-hidden": "true" }, avatar(from, "sm"), h("div", { class: "wire" }), avatar(to, "xs")),
-      h("div", { class: "body" },
-        h("div", { class: "route" }, h("b", {}, from), it.action === "reply" ? " replied to " : " asked ", h("em", {}, to)),
-        md(it.details?.message ?? it.details?.reply ?? ""),
-        h("time", { class: "stamp" }, timeOf(it.at))));
-  }
-  const attn = it.action === "propose-create" || it.action === "propose-update";
-  return h("div", { class: `event${attn ? " attn" : ""}`, title: it.text }, h("span", {}, eventText(it)),
-    attn ? h("button", { class: "btn", onclick: () => open({ kind: "approvals" }) }, "Review") : null);
-}
-function renderTeam(items) {
-  const stream = $("#stream");
-  S.teamIds = new Set(items.map((i) => i.id));
-  if (!items.length) {
-    stream.replaceChildren(h("div", { class: "empty" }, h("h2", {}, "Nothing here yet"),
-      h("p", {}, "When agents are created, approved, or ask each other for help, it shows up here. ",
-        S.agents.some((a) => a.name === "agent-architect" && a.enabled) ? "Try “@agent-architect create an agent that…”." : "Type @ to pick an agent, or /help.")));
-  } else stream.replaceChildren(...withDays(items, "at", teamNode));
-  renderTyping(); scrollDown();
+function setProposalStatus(id, status) {
+  let hit = false;
+  for (const m of S.messages) for (const p of m.proposals ?? []) if (p.id === id && p.status !== status) { p.status = status; hit = true; }
+  if (hit && (S.view?.kind === "agent" || S.view?.kind === "group")) renderMessages();
 }
 
 // ---------------- approvals ----------------
@@ -865,7 +822,7 @@ function openGroupDrawer(g = null) {
   };
   const remove = async () => {
     if (!confirm(`Delete the group “${g.name}” and its messages? The agents stay.`)) return;
-    try { await api("DELETE", `/api/groups/${g.id}`); close(); toast("Group deleted"); await loadState(); open({ kind: "team" }); }
+    try { await api("DELETE", `/api/groups/${g.id}`); close(); toast("Group deleted"); await loadState(); openDefault(); }
     catch (e) { toast(e.message); }
   };
   root.replaceChildren(h("div", { class: "scrim", onclick: close }),
@@ -899,10 +856,6 @@ function connect() {
       S.messages.push(m);
       if (m.role === "agent") delete S.progress[m.author];
       renderMessages();
-    } else if (S.view?.kind === "team" && m.chat === "team" && !S.teamIds?.has(`m${m.id}`)) {
-      S.teamIds?.add(`m${m.id}`);
-      $("#stream .empty")?.remove(); $("#typing")?.remove();
-      $("#stream").append(teamNode({ kind: "message", ...m, at: m.created_at })); renderTyping(); scrollDown();
     }
     refreshSoon();
   });
@@ -921,14 +874,11 @@ function connect() {
   });
   es.addEventListener("event", (ev) => {
     const e = JSON.parse(ev.data);
-    if (S.view?.kind === "team" && !S.teamIds?.has(`e${e.id}`)) {
-      S.teamIds?.add(`e${e.id}`);
-      $("#stream .empty")?.remove(); $("#typing")?.remove();
-      $("#stream").append(teamNode({ kind: "event", id: `e${e.id}`, at: e.at, actor: e.actor, action: e.action, agent: e.agent, details: e.details, text: e.text }));
-      renderTyping(); scrollDown();
-    }
+    if ((e.action === "approve" || e.action === "reject") && e.details?.proposal) setProposalStatus(e.details.proposal, e.action === "approve" ? "approved" : "rejected");
     if (S.view?.kind === "approvals" && /propose|approve|reject/.test(e.action)) renderApprovals();
-    if (/propose-/.test(e.action)) toast(`${e.actor} suggested ${e.action === "propose-create" ? "a new agent" : "a change"}. Open Approvals to review.`);
+    // In the proposer's own chat the Approve/Reject buttons appear under its reply, so no toast there.
+    const here = S.view?.kind === "agent" ? S.view.name === e.actor : !!curGroup()?.members.includes(e.actor);
+    if (/propose-/.test(e.action) && !here) toast(`${e.actor} suggested ${e.action === "propose-create" ? "a new agent" : "a change"}. Open Approvals to review.`);
     refreshSoon();
   });
   es.onerror = () => { es.close(); setTimeout(() => api("GET", "/api/me").then(connect).catch(() => {}), 3000); };
@@ -967,7 +917,7 @@ function showLogin() { $("#app").hidden = true; $("#login").hidden = false; es?.
 async function boot() {
   $("#login").hidden = true; $("#app").hidden = false;
   await loadState(); connect();
-  if (matchMedia("(min-width: 761px)").matches) open({ kind: "team" });
+  openDefault();
 }
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault(); $("#login-err").textContent = "";

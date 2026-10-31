@@ -42,7 +42,7 @@ Be concise. Do not invent versions: if a source can't be reached, say so in the 
   },
 
   // Example: an agent with its own logged-in browser. Needs the browser container
-// (install.sh --browser, or COMPOSE_PROFILES=browser in .env) and logins in secrets/admaster.env.
+  // (COMPOSE_PROFILES=browser) and its logins in the BROWSER_SECRETS variable.
   // It never sees passwords: to log in it types the secret NAMES (OLX_EMAIL, OLX_PASSWORD);
   // the browser server fills in the real values and redacts them from what comes back.
   {
@@ -92,7 +92,8 @@ When the user describes a job:
    its reports and replies in the language the user asked you in.
 5. Call propose_agent / propose_update with a clear reason.
 6. Reply to the user, in the language they wrote in, with: what you proposed, why those
-   tools, the schedule, and that they can approve it in Approvals (or: agents approve <id>).
+   tools, the schedule, and that they can approve it with the buttons under your reply
+   (or in Approvals).
 
 You cannot approve anything yourself, and you cannot grant Bash or agent management.
 `.trim(),

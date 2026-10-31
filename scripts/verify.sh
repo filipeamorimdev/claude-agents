@@ -18,19 +18,27 @@ ok "running"
 x claude-agents 'touch /app/x' && bad "/app is writable" || ok "app code is read-only"
 x claude-agents 'touch /etc/x' && bad "root filesystem is writable" || ok "root filesystem is read-only"
 x claude-agents 'touch /data/.w && rm /data/.w' && ok "data folder is writable" || bad "cannot write to /data (check ownership of DATA_DIR/agents)"
-x claude-agents 'test -e /run/secrets' && bad "secrets are visible to the agents container" || ok "no secrets mounted in the agents container"
+x claude-agents 'test -e /run/secrets || test -n "${BROWSER_SECRETS:-}"' && bad "browser logins are visible to the agents container" || ok "no browser logins in the agents container"
 x claude-agents 'test -S /var/run/docker.sock' && bad "docker socket is mounted!" || ok "no docker socket"
 caps=$(docker inspect -f '{{.HostConfig.CapDrop}}' claude-agents)
 [[ "$caps" == *ALL* ]] && ok "all Linux capabilities dropped" || bad "capabilities not dropped ($caps)"
-x claude-agents 'test -n "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY"' && ok "Claude credentials present" || bad "no Claude credentials in .env"
+x claude-agents 'test -n "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY"' && ok "Claude credentials present" || bad "no Claude credentials (set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)"
 x claude-agents 'agents list' && ok "agent database readable ($(docker exec claude-agents sh -c 'agents list | tail -n +2 | grep -c .') agents)" || bad "agents CLI / database not working"
 
 echo "chat UI"
-UI_PORT=$(grep -E '^UI_PORT=' .env 2>/dev/null | cut -d= -f2); UI_PORT=${UI_PORT:-8090}
+UI_PORT=$(docker port claude-agents 8090/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}'); UI_PORT=${UI_PORT:-8090}
 code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$UI_PORT/" 2>/dev/null)
 [ "$code" = 200 ] && ok "UI answers on port $UI_PORT" || bad "UI not reachable on port $UI_PORT (got $code; is UI_PASSWORD set?)"
 code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$UI_PORT/api/state" 2>/dev/null)
 [ "$code" = 401 ] && ok "UI requires the password" || bad "UI API answered $code without a password!"
+
+echo "firewall container"
+if [ "$(docker inspect -f '{{.State.Running}}' claude-agents-firewall 2>/dev/null)" = true ]; then
+  [ "$(docker inspect -f '{{.State.Health.Status}}' claude-agents-firewall)" = healthy ] && ok "running and healthy" || bad "not healthy (docker logs claude-agents-firewall)"
+  docker logs claude-agents-firewall 2>&1 | grep -q "FIREWALL=off" && bad "FIREWALL=off: the agents can reach your LAN"
+else
+  bad "not running (docker logs claude-agents-firewall)"
+fi
 
 echo "network"
 docker exec claude-agents node -e '
@@ -39,6 +47,10 @@ fetch("https://api.anthropic.com",{signal:AbortSignal.timeout(8000)}).then(()=>p
 
 GW=$(ip route 2>/dev/null | awk '/^default/{print $3; exit}')                                   # your router
 LANIP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')  # this host
+if [ -z "$GW$LANIP" ] && command -v route >/dev/null && [ "$(uname)" = Darwin ]; then          # macOS (Docker Desktop)
+  GW=$(route -n get default 2>/dev/null | awk '/gateway:/{print $2}')
+  LANIP=$(ipconfig getifaddr "$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')" 2>/dev/null)
+fi
 BRIDGE=$(docker network inspect -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' "$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' claude-agents)" 2>/dev/null)  # this host, from inside
 for target in $GW $LANIP $BRIDGE; do
   # DROP -> timeout (blocked). Refused/connected -> the packet got through (not blocked).
@@ -54,7 +66,7 @@ done
 if docker inspect browser-admaster >/dev/null 2>&1; then
   echo "browser-admaster container"
   [ "$(docker inspect -f '{{.State.Running}}' browser-admaster)" = true ] && ok "running" || bad "not running (docker logs browser-admaster)"
-  x browser-admaster 'test -r /run/secrets/admaster' && ok "can read its secrets file" || bad "cannot read /run/secrets/admaster (owner must be the agent uid, mode 400)"
+  x browser-admaster 'test -s /run/browser-secrets/secrets.env' && ok "site logins loaded (BROWSER_SECRETS)" || bad "no site logins: BROWSER_SECRETS is empty"
   [ -z "$(docker port browser-admaster 2>/dev/null)" ] && ok "no ports published to the LAN" || bad "browser has published ports"
   docker exec claude-agents node -e '
     fetch("http://browser-admaster:8931/mcp",{signal:AbortSignal.timeout(5000)}).then(()=>process.exit(0)).catch(()=>process.exit(1))' \

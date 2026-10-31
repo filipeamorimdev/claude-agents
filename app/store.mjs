@@ -278,6 +278,9 @@ export function openStore(file) {
     proposals: (status = "open") =>
       db.prepare("SELECT * FROM proposals WHERE (? = 'all' OR status = ?) ORDER BY id").all(status, status)
         .map((p) => ({ ...p, config: JSON.parse(p.config) })),
+    /** Ids of proposals an agent made since an ISO time (to attach them to its chat reply). */
+    proposalIdsSince: (by, since) =>
+      db.prepare("SELECT id FROM proposals WHERE proposed_by=? AND created_at>=? ORDER BY id").all(by, since).map((r) => r.id),
     proposal: (id) => {
       const p = db.prepare("SELECT * FROM proposals WHERE id=?").get(id);
       return p && { ...p, config: JSON.parse(p.config) };

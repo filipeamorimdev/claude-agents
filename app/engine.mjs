@@ -18,6 +18,23 @@ import { turnsFor } from "./store.mjs";
 const READ_TOOLS = new Set(["Read", "Glob", "Grep"]);
 const WRITE_TOOLS = new Set(["Write", "Edit"]);
 const STALE_RUN_MS = 2 * 60 * 60 * 1000;
+const LIMIT_LABEL = { five_hour: "5h", seven_day: "weekly", seven_day_opus: "weekly Opus", seven_day_sonnet: "weekly Sonnet", overage: "extra usage" };
+
+const kTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+
+/** One log line from data the stream already carried: this run's tokens and the plan limit headroom. */
+function usageLine(tokens, limit, tz) {
+  const parts = [`tokens: ${kTokens(tokens.input + tokens.cacheRead + tokens.cacheWrite)} in` +
+    ` (${kTokens(tokens.cacheRead)} cached), ${kTokens(tokens.output)} out`];
+  if (limit) {
+    const label = LIMIT_LABEL[limit.rateLimitType] ?? limit.rateLimitType ?? "plan";
+    const used = limit.utilization != null ? `${Math.round(limit.utilization * 100)}% used, ${Math.round((1 - limit.utilization) * 100)}% left`
+      : limit.status === "rejected" ? "limit reached" : limit.status;
+    const resets = limit.resetsAt ? `, resets ${new Date(limit.resetsAt * 1000).toLocaleString("en-GB", { timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit" })}` : "";
+    parts.push(`${label} limit: ${used}${resets}`);
+  }
+  return parts.join(" · ");
+}
 
 export function createEngine({ store, registry, dataDir, tz, log = console.log }) {
   const forbidden = [
@@ -139,8 +156,22 @@ export function createEngine({ store, registry, dataDir, tz, log = console.log }
           env: agentEnv(),
         },
       });
+      // Per-run token totals from each API response (a response split into several messages shares one id),
+      // so a resumed chat session doesn't count its earlier turns again.
+      const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      const counted = new Set();
+      let limit;
       for await (const msg of stream) {
         await appendFile(logFile, JSON.stringify(msg) + "\n");
+        if (msg.type === "rate_limit_event") limit = msg.rate_limit_info;
+        if (msg.type === "assistant" && msg.message?.usage && !counted.has(msg.message.id)) {
+          counted.add(msg.message.id);
+          const u = msg.message.usage;
+          tokens.input += u.input_tokens ?? 0;
+          tokens.output += u.output_tokens ?? 0;
+          tokens.cacheRead += u.cache_read_input_tokens ?? 0;
+          tokens.cacheWrite += u.cache_creation_input_tokens ?? 0;
+        }
         if (msg.type === "assistant") {
           for (const block of msg.message?.content ?? []) {
             if (block.type === "tool_use") { log(name, `tool: ${block.name}`); onProgress?.({ type: "tool", name: block.name }); }
@@ -157,6 +188,7 @@ export function createEngine({ store, registry, dataDir, tz, log = console.log }
           if (chat && msg.session_id) store.setSession(name, msg.session_id);
           log(name, `${ok ? "done" : `ended (${msg.is_error ? "error" : msg.subtype})`} in ${((Date.now() - started) / 1000).toFixed(0)}s, ${msg.num_turns} turns`);
           if (denials.length) log(name, `refused ${denials.length} tool call(s): ${denials.join(", ")}`);
+          log(name, usageLine(tokens, limit, tz));
         }
       }
     };
@@ -184,11 +216,13 @@ export function createEngine({ store, registry, dataDir, tz, log = console.log }
   return { runAgent, toolPolicy, isRunning, registry };
 }
 
-/** Load a JS config module that exports `name`, falling back to the example file. */
+/** Load a JS config module that exports `name`, falling back to the example files. */
 export async function loadConfig(dir, file, exportName) {
-  for (const f of [file, file.replace(/\.mjs$/, ".example.mjs")]) {
+  const example = file.replace(/\.mjs$/, ".example.mjs");
+  const defaults = path.join(import.meta.dirname, "defaults");
+  for (const f of [path.join(dir, file), path.join(dir, example), path.join(defaults, example)]) {
     try {
-      const mod = await import(path.join(dir, f));
+      const mod = await import(f);
       return mod[exportName];
     } catch (e) {
       if (e.code !== "ERR_MODULE_NOT_FOUND") throw e;

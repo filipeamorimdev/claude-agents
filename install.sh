@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# claude-agents installer
+# claude-agents installer for the command line. It asks for the settings, writes them to .env
+# (the CLI's version of a Docker UI's stack variables) and starts the stack. Folder ownership,
+# default config and the LAN firewall are handled by the stack itself (init + firewall services).
 #
 #   sudo ./install.sh                      interactive install (or re-run to update)
 #   sudo ./install.sh --browser            also enable the browser agent container
 #   sudo ./install.sh --yes                non-interactive; token read from env:
 #        CLAUDE_CODE_OAUTH_TOKEN=... sudo -E ./install.sh --yes --data-dir /srv/x/agents
 #   sudo ./install.sh --uninstall          stop and remove services (keeps data)
-#   sudo ./install.sh --uninstall --purge  also delete data, secrets, config and the system user
+#   sudo ./install.sh --uninstall --purge  also delete data, .env and the system user
 #   ./install.sh --dry-run                 print what would be done, change nothing
 #
 # Other options: --data-dir DIR  --tz ZONE  --subnet CIDR  --ui-port N  --no-firewall  --no-browser
@@ -17,11 +19,12 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_DIR"
 
 AGENT_USER=claude-agents
-FW_BIN=/usr/local/sbin/claude-agents-firewall
-FW_UNIT=/etc/systemd/system/claude-agents-firewall.service
-ETC_DIR=/etc/claude-agents
+# Left over from installs before the firewall moved into a container
+OLD_FW_BIN=/usr/local/sbin/claude-agents-firewall
+OLD_FW_UNIT=/etc/systemd/system/claude-agents-firewall.service
+OLD_ETC_DIR=/etc/claude-agents
 
-YES=0 DRY=0 UNINSTALL=0 PURGE=0 FIREWALL=1
+YES=0 DRY=0 UNINSTALL=0 PURGE=0 OPT_FIREWALL=""
 OPT_DATA_DIR="" OPT_TZ="" OPT_SUBNET="" OPT_BROWSER="" OPT_UI_PORT=""
 
 # ---------- helpers ----------
@@ -44,7 +47,14 @@ yesno() { # yesno "question" default(y/n) -> returns 0 for yes
   read -r -p "    $1 [$( [ "$def" = y ] && echo Y/n || echo y/N )]: " ans || true
   ans=${ans:-$def}; [[ "$ans" =~ ^[Yy] ]]
 }
-env_get() { [ -f .env ] && grep -E "^$1=" .env | tail -1 | cut -d= -f2- || true; }
+env_get() { # value of VAR in .env, without the single quotes this script writes
+  [ -f .env ] || return 0
+  grep -E "^$1=" .env | tail -1 | cut -d= -f2- | sed -E "s/^'(.*)'$/\1/" || true
+}
+quote() { # single-quote a .env value so compose doesn't expand $ in it
+  case "$1" in *"'"*) die "$2 can't contain a single quote (')" ;; esac
+  printf "'%s'" "$1"
+}
 
 # ---------- args ----------
 while [ $# -gt 0 ]; do
@@ -53,7 +63,7 @@ while [ $# -gt 0 ]; do
     --dry-run)     DRY=1 ;;
     --uninstall)   UNINSTALL=1 ;;
     --purge)       PURGE=1 ;;
-    --no-firewall) FIREWALL=0 ;;
+    --no-firewall) OPT_FIREWALL=off ;;
     --browser)     OPT_BROWSER=1 ;;
     --no-browser)  OPT_BROWSER=0 ;;
     --data-dir)    OPT_DATA_DIR=${2:?}; shift ;;
@@ -68,32 +78,36 @@ done
 
 [ "$DRY" = 1 ] || [ "$(id -u)" = 0 ] || die "run as root: sudo ./install.sh"
 
+remove_old_firewall() { # $1 = "keep-rules" to leave the iptables rules for the container to take over
+  if [ -f "$OLD_FW_UNIT" ]; then
+    if [ "${1:-}" = keep-rules ]; then run systemctl disable claude-agents-firewall >/dev/null 2>&1 || true
+    else run systemctl disable --now claude-agents-firewall || true; fi
+    run rm -f "$OLD_FW_UNIT"; run systemctl daemon-reload
+    info "removed the old systemd firewall service (now the firewall container)"
+  fi
+  run rm -f "$OLD_FW_BIN"
+}
+
 # ---------- uninstall ----------
 if [ "$UNINSTALL" = 1 ]; then
+  DATA_DIR=$(env_get DATA_DIR)
   if [ "$PURGE" = 1 ]; then
-    DATA_DIR=$(env_get DATA_DIR)
-    warn "--purge deletes ${DATA_DIR:-<unknown data dir>} (agent workspaces, logs, browser logins), .env, secrets and config/agents.mjs."
+    warn "--purge deletes ${DATA_DIR:-<unknown data dir>} (agent workspaces, logs, browser logins, config) and .env."
     [ "$YES" = 1 ] || yesno "Really purge everything?" n || die "aborted, nothing changed"
   fi
   step "Stopping containers"
   run docker compose --profile browser down || true
-  step "Removing firewall service"
-  if [ -f "$FW_UNIT" ]; then
-    run systemctl disable --now claude-agents-firewall || true
-    run rm -f "$FW_UNIT"; run systemctl daemon-reload
-  elif [ -x "$FW_BIN" ]; then
-    run "$FW_BIN" --remove "$(env_get AGENTS_SUBNET)" || true
-  fi
-  run rm -f "$FW_BIN"
+  step "Removing firewall rules"
+  run docker compose run --rm --no-deps firewall remove || warn "could not remove the rules (they go away at the next reboot)"
+  remove_old_firewall
   if [ "$PURGE" = 1 ]; then
     step "Purging data"
     [ -n "$DATA_DIR" ] && [ "$DATA_DIR" != "/" ] && run rm -rf "$DATA_DIR"
-    run rm -rf "$ETC_DIR" .env config/agents.mjs config/mcp-servers.mjs
-    run find secrets -name '*.env' ! -name '*.example' -delete
+    run rm -rf "$OLD_ETC_DIR" .env config/agents.mjs config/mcp-servers.mjs secrets
     id "$AGENT_USER" >/dev/null 2>&1 && run userdel "$AGENT_USER" || true
-    run docker image rm claude-agents:local || true
+    run docker image rm claude-agents:local claude-agents-firewall:local || true
   else
-    info "Data, .env, secrets and config kept. Use --uninstall --purge to delete them."
+    info "Data and .env kept. Use --uninstall --purge to delete them."
   fi
   step "Uninstalled"
   exit 0
@@ -114,7 +128,7 @@ info "compose: $(docker compose version --short) ✓"
 MEM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
 [ "$MEM_MB" -lt 3500 ] && warn "only ${MEM_MB} MB RAM; 4 GB+ recommended (8 GB with the browser agent)"
 [ -d /etc/openmediavault ] && info "OpenMediaVault detected"
-for cname in claude-agents browser-admaster; do
+for cname in claude-agents browser-admaster claude-agents-firewall; do
   owner=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$cname" 2>/dev/null || true)
   if [ -n "$owner" ] && [ "$owner" != "$REPO_DIR" ]; then
     die "a '$cname' container from another setup is running ($owner). Stop it first (OMV: Services → Compose → Files → Down)."
@@ -131,7 +145,7 @@ if [ -z "$DEF_DATA" ]; then
   OMV_DISK=$(ls -d /srv/dev-disk-by-* 2>/dev/null | head -1 || true)
   [ -n "$OMV_DISK" ] && DEF_DATA="$OMV_DISK/claude-agents-data"
 fi
-if [ -n "$OPT_DATA_DIR" ]; then DATA_DIR=$OPT_DATA_DIR; else ask DATA_DIR "Data folder (workspaces, logs, browser logins)" "$DEF_DATA"; fi
+if [ -n "$OPT_DATA_DIR" ]; then DATA_DIR=$OPT_DATA_DIR; else ask DATA_DIR "Data folder (workspaces, logs, browser logins, config)" "$DEF_DATA"; fi
 case "$DATA_DIR" in /*) ;; *) die "data folder must be an absolute path" ;; esac
 [ "$DATA_DIR" = / ] && die "refusing to use / as data folder"
 
@@ -178,7 +192,19 @@ if [ -z "$UI_PASSWORD" ]; then
 fi
 info "chat UI on port $UI_PORT"
 
-# Browser agent
+# Firewall (exceptions used to live in /etc/claude-agents/firewall-allow)
+FIREWALL=${OPT_FIREWALL:-$(env_get FIREWALL)}; FIREWALL=${FIREWALL:-on}
+FIREWALL_ALLOW=$(env_get FIREWALL_ALLOW)
+if [ -z "$FIREWALL_ALLOW" ] && [ -f "$OLD_ETC_DIR/firewall-allow" ]; then
+  FIREWALL_ALLOW=$(grep -vE '^[[:space:]]*(#|$)' "$OLD_ETC_DIR/firewall-allow" | paste -sd, - || true)
+  [ -n "$FIREWALL_ALLOW" ] && info "kept firewall exceptions: $FIREWALL_ALLOW"
+fi
+if [ "$FIREWALL" = on ] && ! command -v iptables >/dev/null; then
+  warn "iptables not found on this host; if the firewall container fails, re-run with --no-firewall"
+fi
+[ "$FIREWALL" = off ] && warn "firewall off: agents can reach your local network"
+
+# Browser agent (logins used to live in secrets/admaster.env)
 DEF_PROFILES=$(env_get COMPOSE_PROFILES)
 if [ "$OPT_BROWSER" = 1 ]; then BROWSER=1
 elif [ "$OPT_BROWSER" = 0 ]; then BROWSER=0
@@ -186,8 +212,14 @@ elif [ "$DEF_PROFILES" = browser ]; then BROWSER=1
 elif yesno "Enable the browser agent container (logs into websites, ~0.5-1 GB RAM)?" n; then BROWSER=1
 else BROWSER=0; fi
 ORIGINS=$(env_get BROWSER_ALLOWED_ORIGINS); ORIGINS=${ORIGINS:-https://www.olx.pt}
+BROWSER_SECRETS=$(env_get BROWSER_SECRETS)
+if [ -z "$BROWSER_SECRETS" ] && [ -f secrets/admaster.env ]; then
+  BROWSER_SECRETS=$(grep -vE '^[[:space:]]*(#|$)' secrets/admaster.env | paste -sd';' - || true)
+  [ -n "$BROWSER_SECRETS" ] && info "moved the logins from secrets/admaster.env to BROWSER_SECRETS in .env"
+fi
 if [ "$BROWSER" = 1 ] && [ "$YES" = 0 ]; then
   ask ORIGINS "Websites the browser may open (separate with ;)" "$ORIGINS"
+  [ -z "$BROWSER_SECRETS" ] && info "Add the site logins later as BROWSER_SECRETS in .env (NAME=value;NAME=value)"
 fi
 
 # ---------- system user ----------
@@ -200,33 +232,26 @@ else
 fi
 if [ "$DRY" = 1 ] && ! id "$AGENT_USER" >/dev/null 2>&1; then UID_A=999 GID_A=999
 else UID_A=$(id -u "$AGENT_USER"); GID_A=$(id -g "$AGENT_USER"); fi
-info "uid:gid = $UID_A:$GID_A"
+info "uid:gid = $UID_A:$GID_A (the init container sets the folder owners)"
 
-# ---------- folders ----------
-step "Folders in $DATA_DIR"
-run mkdir -p "$DATA_DIR/agents/workspaces/ad-master/shots" "$DATA_DIR/browsers/admaster"
-run chown root:"$GID_A" "$DATA_DIR"; run chmod 750 "$DATA_DIR"
-run chown -R "$UID_A:$GID_A" "$DATA_DIR/agents" "$DATA_DIR/browsers"
-run chmod 750 "$DATA_DIR/agents"; run chmod 700 "$DATA_DIR/browsers" "$DATA_DIR/browsers/admaster"
-info "agents → $DATA_DIR/agents   browser profiles → $DATA_DIR/browsers (700)"
-
-# ---------- config, secrets, .env ----------
-step "Config and secrets"
+# ---------- config ----------
+# Config now lives in DATA_DIR/config; move a customised repo config/ there on upgrade.
+step "Config"
+run mkdir -p "$DATA_DIR/config"
 for f in agents mcp-servers; do
-  if [ -f "config/$f.mjs" ]; then info "config/$f.mjs exists, keeping it ✓"
-  else run cp "config/$f.example.mjs" "config/$f.mjs"; info "created config/$f.mjs from the example"; fi
-  run chmod 644 "config/$f.mjs"
+  if [ -f "$DATA_DIR/config/$f.mjs" ]; then info "$DATA_DIR/config/$f.mjs exists, keeping it ✓"
+  elif [ -f "config/$f.mjs" ]; then run cp "config/$f.mjs" "$DATA_DIR/config/$f.mjs"; info "moved config/$f.mjs to $DATA_DIR/config/"
+  else info "$DATA_DIR/config/$f.mjs will be created from the defaults on first start"; fi
 done
 
-run chmod 700 secrets
-if [ -f secrets/admaster.env ]; then info "secrets/admaster.env exists, keeping it ✓"
-else run cp secrets/admaster.env.example secrets/admaster.env; info "created secrets/admaster.env (fill in your logins)"; fi
-run chown "$UID_A:$GID_A" secrets/admaster.env; run chmod 400 secrets/admaster.env
-
+# ---------- .env ----------
+step "Settings file"
 ENV_CONTENT="# Generated by install.sh on $(date -Iseconds). Private: chmod 600.
+# Same variables as a Docker UI's stack environment; see the top of compose.yaml.
+COMPOSE_FILE=compose.yaml:compose.build.yaml
 CLAUDE_CODE_OAUTH_TOKEN=$TOKEN_OAUTH
 ANTHROPIC_API_KEY=$TOKEN_API
-UI_PASSWORD=$UI_PASSWORD
+UI_PASSWORD=$(quote "$UI_PASSWORD" UI_PASSWORD)
 UI_PORT=$UI_PORT
 UI_BIND=$(env_get UI_BIND | grep . || echo 0.0.0.0)
 AGENT_UID=$UID_A
@@ -234,45 +259,28 @@ AGENT_GID=$GID_A
 DATA_DIR=$DATA_DIR
 TZ=$TZ_VAL
 AGENTS_SUBNET=$SUBNET
+FIREWALL=$FIREWALL
+FIREWALL_ALLOW=$FIREWALL_ALLOW
 COMPOSE_PROFILES=$( [ "$BROWSER" = 1 ] && echo browser )
 BROWSER_ALLOWED_ORIGINS=$ORIGINS
+BROWSER_SECRETS=$(quote "$BROWSER_SECRETS" BROWSER_SECRETS)
+HA_TOKEN=$(env_get HA_TOKEN)
 AGENTS_CPUS=$(env_get AGENTS_CPUS | grep . || echo 1.5)
 AGENTS_MEMORY=$(env_get AGENTS_MEMORY | grep . || echo 1g)
 BROWSER_CPUS=$(env_get BROWSER_CPUS | grep . || echo 2.0)
 BROWSER_MEMORY=$(env_get BROWSER_MEMORY | grep . || echo 1g)"
 if [ "$DRY" = 1 ]; then
-  echo "${c_dim}    [dry-run] write .env:${c_off}"; echo "$ENV_CONTENT" | sed -E 's/^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|UI_PASSWORD)=.+/\1=<hidden>/; s/^/      /'
+  echo "${c_dim}    [dry-run] write .env:${c_off}"
+  echo "$ENV_CONTENT" | sed -E 's/^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|UI_PASSWORD|BROWSER_SECRETS|HA_TOKEN)=.+/\1=<hidden>/; s/^/      /'
 else
   (umask 077; printf '%s\n' "$ENV_CONTENT" > .env); chown root:root .env; chmod 600 .env
 fi
 info ".env written (600) ✓"
-
-# ---------- firewall ----------
-step "LAN firewall"
-if [ "$FIREWALL" = 0 ]; then
-  warn "skipped (--no-firewall): agents can reach your local network"
-elif ! command -v iptables >/dev/null; then
-  warn "iptables not found; skipping. Agents can reach your local network."
-else
-  run install -m 755 firewall/claude-agents-firewall "$FW_BIN"
-  run mkdir -p "$ETC_DIR"
-  if [ "$DRY" = 1 ]; then echo "${c_dim}    [dry-run] write $ETC_DIR/firewall.env: AGENTS_SUBNET=$SUBNET${c_off}"
-  else echo "AGENTS_SUBNET=$SUBNET" > "$ETC_DIR/firewall.env"
-       [ -f "$ETC_DIR/firewall-allow" ] || printf '# IP:PORT exceptions the agents may reach on your LAN, one per line\n# 192.168.1.50:8123\n' > "$ETC_DIR/firewall-allow"; fi
-  if command -v systemctl >/dev/null && [ -d /run/systemd/system ]; then
-    run install -m 644 firewall/claude-agents-firewall.service "$FW_UNIT"
-    run systemctl daemon-reload
-    run systemctl enable claude-agents-firewall >/dev/null
-    run systemctl restart claude-agents-firewall
-    info "active, and re-applied at every boot (systemd) ✓"
-  else
-    run "$FW_BIN" "$SUBNET"
-    warn "no systemd: rules are active now but NOT persistent across reboots"
-  fi
-fi
+[ -f secrets/admaster.env ] && [ -n "$BROWSER_SECRETS" ] && warn "secrets/admaster.env is no longer used; delete it once the browser logs in"
 
 # ---------- start ----------
 step "Building and starting (first build takes a few minutes on a Pi)"
+remove_old_firewall keep-rules
 run docker compose build --pull
 [ "$BROWSER" = 1 ] && run docker compose pull browser-admaster
 run docker compose up -d --remove-orphans
@@ -292,7 +300,8 @@ cat <<EOF
     Create one:    docker exec -it claude-agents agents ask agent-architect "an agent that ..."
     Run one now:   docker exec -it claude-agents agents run release-watch
     Logs:          docker logs -f claude-agents
+    Config:        $DATA_DIR/config/   (then: docker compose restart claude-agents)
     Reports:       $DATA_DIR/agents/workspaces/<agent>/reports/
 EOF
-[ "$BROWSER" = 1 ] && echo "    Logins:        edit secrets/admaster.env, then: docker compose restart browser-admaster"
+[ "$BROWSER" = 1 ] && echo "    Logins:        edit BROWSER_SECRETS in .env, then: docker compose up -d browser-admaster"
 exit 0

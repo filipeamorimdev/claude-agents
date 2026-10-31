@@ -47,7 +47,7 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
     for (const res of clients) res.write(payload);
   };
   bus.on("event", (e) => broadcast("event", { ...e, text: describeEvent(e) }));
-  bus.on("message", (m) => broadcast("message", m));
+  bus.on("message", (m) => broadcast("message", withProposals(m)));
   bus.on("running", (r) => broadcast("running", r));
   setInterval(() => { for (const res of clients) res.write(": ping\n\n"); }, 25_000).unref();
 
@@ -71,6 +71,16 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
     model: a.model, effort: a.effort, maxTurns: a.maxTurns, tools: a.tools, running: running.includes(a.name),
   });
   const addMessage = (...args) => { const m = store.addMessage(...args); bus.emit("message", m); return m; };
+  // A reply that made suggestions carries them (current status included), so the chat can show Approve/Reject under it.
+  function withProposals(m) {
+    if (!m.meta?.proposals?.length) return m;
+    const proposals = m.meta.proposals.map((id) => store.proposal(id)).filter(Boolean).map((p) => ({
+      id: p.id, kind: p.kind, agent: p.agent, status: p.status, reason: p.reason,
+      description: p.config.description, schedule: p.config.schedule, tools: p.config.tools,
+      changes: p.kind === "update" && p.status === "open" ? Object.keys(diff(store.get(p.agent), p.config)) : [],
+    }));
+    return { ...m, proposals };
+  }
 
   async function loadImages(chat, attachments) {
     const out = [];
@@ -93,13 +103,16 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
     bus.emit("running", { agent, running: true });
     try {
       const images = await loadImages(agent, attachments);
+      const started = new Date().toISOString();
       const r = await engine.runAgent(agent, {
-        trigger: chat === "team" || chat.startsWith("group:") ? chat : "chat",
+        trigger: chat.startsWith("group:") ? chat : "chat",
         message: text || "(see the attached image)",
         images, chat: resumeChat, model, effort,
         onProgress: (p) => broadcast("progress", { agent, chat, ...p }),
       });
-      addMessage(chat, "agent", agent, r.result, { meta: { model: r.model, effort: r.effort, turns: r.turns, ok: r.ok } });
+      addMessage(chat, "agent", agent, r.result, {
+        meta: { model: r.model, effort: r.effort, turns: r.turns, ok: r.ok, proposals: store.proposalIdsSince(agent, started) },
+      });
     } finally {
       bus.emit("running", { agent, running: false });
     }
@@ -130,7 +143,6 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
     const last = Object.fromEntries(store.lastMessages().map((m) => [m.chat, m]));
     send(res, 200, {
       agents: store.list().map((a) => ({ ...agentView(a, running), last: last[a.name] ?? null })),
-      team: last.team ?? null,
       groups: store.groups().map((g) => ({ ...g, last: last[`group:${g.id}`] ?? null })),
       proposals: store.proposals("open").length,
       models: MODELS,
@@ -155,8 +167,11 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
       if (engine.isRunning(name)) return send(res, 409, { error: `${name} is already running` });
       addMessage(name, "system", "system", "Running scheduled task now…");
       bus.emit("running", { agent: name, running: true });
+      const started = new Date().toISOString();
       engine.runAgent(name, { trigger: "manual", onProgress: (p) => broadcast("progress", { agent: name, chat: name, ...p }) })
-        .then((r) => addMessage(name, "agent", name, r.result, { meta: { model: r.model, effort: r.effort, turns: r.turns, ok: r.ok, task: true } }))
+        .then((r) => addMessage(name, "agent", name, r.result, {
+          meta: { model: r.model, effort: r.effort, turns: r.turns, ok: r.ok, task: true, proposals: store.proposalIdsSince(name, started) },
+        }))
         .finally(() => bus.emit("running", { agent: name, running: false }));
     }
     send(res, 200, { ok: true });
@@ -164,7 +179,7 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
 
   route("GET", "/api/chats/([a-z0-9-]+)/messages", (req, res, [chat], url) => {
     const before = url.searchParams.get("before");
-    send(res, 200, { messages: store.messages(chat, before ? Number(before) : null) });
+    send(res, 200, { messages: store.messages(chat, before ? Number(before) : null).map(withProposals) });
   });
 
   route("POST", "/api/chats/([a-z0-9-]+)/messages", async (req, res, [name]) => {
@@ -181,39 +196,6 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
     send(res, 202, { message: msg });
     respond({ agent: name, chat: name, text: String(text), attachments: msg.attachments, model, effort, resumeChat: true })
       .catch((e) => log("ui", `chat error: ${e.message}`));
-  });
-
-  // Team channel: "@agent message" asks that agent; the reply is posted to the team.
-  route("GET", "/api/team", (req, res) => {
-    const events = store.events(150).map((e) => ({ ...e, details: e.details ? JSON.parse(e.details) : null }));
-    const items = [
-      ...events.map((e) => ({ kind: "event", id: `e${e.id}`, at: e.at, actor: e.actor, action: e.action, agent: e.agent, details: e.details, text: describeEvent({ ...e }) })),
-      ...store.messages("team", null, 100).map((m) => ({ kind: "message", id: `m${m.id}`, at: m.created_at, ...m })),
-    ].sort((a, b) => a.at.localeCompare(b.at));
-    send(res, 200, { items: items.slice(-200) });
-  });
-
-  route("POST", "/api/team/messages", async (req, res) => {
-    const { text = "" } = await json(req);
-    const body = String(text).trim();
-    if (!body) return send(res, 400, { error: "empty message" });
-    // "@name" anywhere in the message picks the agent; the first one that exists wins.
-    const mentions = [...body.matchAll(/(^|\s)@([a-z0-9-]+)/gi)].map((x) => ({ token: x[0], name: x[2].toLowerCase() }));
-    const hit = mentions.find((x) => store.get(x.name));
-    const target = hit && store.get(hit.name);
-    const ask = hit ? body.replace(hit.token, hit.token.startsWith("@") ? "" : " ").trim() : "";
-    const msg = addMessage("team", "human", "you", body);
-    send(res, 202, { message: msg });
-
-    const available = store.list().filter((a) => a.enabled).map((a) => `@${a.name}`);
-    const tryThese = available.length ? `You can ask: ${available.join(", ")}.` : "There are no agents turned on.";
-    const hint = (why) => addMessage("team", "system", "system", `${why} ${tryThese} Type /help for commands.`);
-    if (!target) return hint(mentions.length
-      ? `There's no agent called @${mentions[0].name}.`
-      : "Start with @ and an agent's name to ask it something.");
-    if (!target.enabled) return hint(`@${target.name} is turned off. Turn it on from its chat first.`);
-    if (!ask) return hint(`What should @${target.name} do? Write your request after its name.`);
-    respond({ agent: target.name, chat: "team", text: ask, resumeChat: false }).catch((e) => log("ui", `team error: ${e.message}`));
   });
 
   // Groups: every member agent gets each message and replies in the group, one after another.
@@ -256,7 +238,7 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
   route("GET", "/api/groups/(\\d+)/messages", (req, res, [id], url) => {
     if (!store.group(Number(id))) return send(res, 404, { error: "no such group" });
     const before = url.searchParams.get("before");
-    send(res, 200, { messages: store.messages(`group:${id}`, before ? Number(before) : null) });
+    send(res, 200, { messages: store.messages(`group:${id}`, before ? Number(before) : null).map(withProposals) });
   });
 
   const groupQueues = new Map(); // group id -> promise of the delivery in progress (keeps messages in order)
