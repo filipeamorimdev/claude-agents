@@ -1,0 +1,96 @@
+# Claude agents: generated settings live in .env (created by install.sh).
+# Start/stop manually with:  docker compose up -d   /   docker compose down
+# The browser container only starts when COMPOSE_PROFILES includes "browser".
+
+services:
+  claude-agents:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    image: claude-agents:local
+    container_name: claude-agents
+    restart: unless-stopped
+    user: "${AGENT_UID:?run install.sh first}:${AGENT_GID:?run install.sh first}"
+    environment:
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TZ: ${TZ:-UTC}
+      DATA_DIR: /data
+      HOME: /data/home
+      DISABLE_AUTOUPDATER: "1"
+      UI_PASSWORD: ${UI_PASSWORD:-}     # chat UI login; empty = UI off
+      UI_PORT: "8090"
+    ports:
+      # The chat UI: the only port this stack publishes. Reach it on your LAN or over your VPN.
+      - "${UI_BIND:-0.0.0.0}:${UI_PORT:-8090}:8090"
+    volumes:
+      - ./config:/app/config:ro                  # seed agents + MCP server registry (human-controlled)
+      - ${DATA_DIR:?run install.sh first}/agents:/data
+    # --- hardening ---
+    read_only: true
+    tmpfs:
+      - /tmp:rw,exec,nosuid,size=256m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks: [agents]
+    dns: [1.1.1.1, 9.9.9.9]          # public DNS: the firewall blocks your LAN, including local resolvers
+    deploy:
+      resources:
+        limits:
+          cpus: "${AGENTS_CPUS:-1.5}"
+          memory: ${AGENTS_MEMORY:-1g}
+          pids: 256
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  browser-admaster:
+    profiles: [browser]
+    image: mcr.microsoft.com/playwright/mcp
+    container_name: browser-admaster
+    restart: unless-stopped
+    init: true
+    user: "${AGENT_UID}:${AGENT_GID}"
+    environment:
+      HOME: /tmp
+    shm_size: 1gb
+    command:
+      - /app/cli.js
+      - --headless
+      - --browser=chromium
+      - --no-sandbox
+      - --port=8931
+      - --host=0.0.0.0
+      - --allowed-hosts=*
+      - --user-data-dir=/profile
+      - --output-dir=/shots
+      - --secrets=/run/secrets/admaster
+      - --allowed-origins=${BROWSER_ALLOWED_ORIGINS:-https://www.olx.pt}
+    secrets: [admaster]
+    volumes:
+      - ${DATA_DIR}/browsers/admaster:/profile
+      - ${DATA_DIR}/agents/workspaces/ad-master/shots:/shots
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks: [agents]
+    dns: [1.1.1.1, 9.9.9.9]
+    # no "ports:": only reachable from claude-agents on the internal network
+    deploy:
+      resources:
+        limits:
+          cpus: "${BROWSER_CPUS:-2.0}"
+          memory: ${BROWSER_MEMORY:-1g}
+          pids: 512
+
+secrets:
+  admaster:
+    file: ./secrets/admaster.env
+
+networks:
+  agents:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${AGENTS_SUBNET:-172.30.0.0/24}

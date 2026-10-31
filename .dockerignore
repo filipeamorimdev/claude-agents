@@ -1,0 +1,9 @@
+# Never send private files into the build context
+.env
+secrets/
+data/
+config/agents.mjs
+config/mcp-servers.mjs
+app/node_modules/
+.git/
+*.zip

@@ -1,0 +1,14 @@
+# Private, created by install.sh
+.env
+config/agents.mjs
+config/mcp-servers.mjs
+secrets/*.env
+!secrets/*.env.example
+data/
+
+# Node
+app/node_modules/
+app/package-lock.json
+
+# Deploy zips
+*.zip

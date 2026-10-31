@@ -1,0 +1,72 @@
+#!/bin/sh
+# claude-agents-firewall: keep the agents' Docker network away from your LAN and this host.
+#
+#   claude-agents-firewall <subnet>            apply rules (default 172.30.0.0/24)
+#   claude-agents-firewall --remove <subnet>   remove rules
+#
+# Containers on <subnet> can still reach the internet (Claude API, websites) and each
+# other. They cannot open connections to:
+#   - private address ranges (other machines: router, smart home, PCs)   -> FORWARD/DOCKER-USER
+#   - this host itself (NAS web UI, SMB/NFS, SSH), via any of its IPs    -> INPUT
+#
+# Exceptions: list "IP:PORT" (or just "IP") in /etc/claude-agents/firewall-allow,
+# e.g. "192.168.1.50:8123" for Home Assistant. Then: systemctl restart claude-agents-firewall
+
+set -eu
+FWD=CLAUDE-AGENTS
+IN=CLAUDE-AGENTS-IN
+ALLOW_FILE=/etc/claude-agents/firewall-allow
+
+REMOVE=0
+if [ "${1:-}" = "--remove" ]; then REMOVE=1; shift; fi
+SUBNET="${1:-172.30.0.0/24}"
+
+command -v iptables >/dev/null 2>&1 || { echo "iptables not found; cannot install the LAN firewall" >&2; exit 1; }
+
+# Detach and clear our chains (safe to run repeatedly)
+while iptables -D DOCKER-USER -s "$SUBNET" -j "$FWD" 2>/dev/null; do :; done
+while iptables -D INPUT -s "$SUBNET" -j "$IN" 2>/dev/null; do :; done
+iptables -F "$FWD" 2>/dev/null || true
+iptables -F "$IN" 2>/dev/null || true
+
+if [ "$REMOVE" = 1 ]; then
+  iptables -X "$FWD" 2>/dev/null || true
+  iptables -X "$IN" 2>/dev/null || true
+  echo "claude-agents firewall removed"
+  exit 0
+fi
+
+iptables -N "$FWD" 2>/dev/null || true
+iptables -N "$IN" 2>/dev/null || true
+iptables -N DOCKER-USER 2>/dev/null || true   # Docker reads this chain before its own rules
+
+for chain in "$FWD" "$IN"; do
+  iptables -A "$chain" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+  if [ -f "$ALLOW_FILE" ]; then
+    grep -vE '^[[:space:]]*(#|$)' "$ALLOW_FILE" | while IFS=: read -r ip port; do
+      if [ -n "$port" ]; then
+        iptables -A "$chain" -d "$ip" -p tcp --dport "$port" -j RETURN
+      else
+        iptables -A "$chain" -d "$ip" -j RETURN
+      fi
+    done
+  fi
+done
+
+# Forwarded traffic: agents <-> browser is fine, private ranges are not, internet continues
+iptables -A "$FWD" -d "$SUBNET" -j RETURN
+for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10; do
+  iptables -A "$FWD" -d "$net" -j DROP
+done
+iptables -A "$FWD" -j RETURN
+
+# Traffic to this host: nothing new from the agents (they use public DNS, see compose.yaml)
+iptables -A "$IN" -j DROP
+
+iptables -I DOCKER-USER 1 -s "$SUBNET" -j "$FWD"
+iptables -I INPUT 1 -s "$SUBNET" -j "$IN"
+
+if [ -f "$ALLOW_FILE" ] && grep -qvE '^[[:space:]]*(#|$)' "$ALLOW_FILE"; then
+  echo "exceptions: $(grep -vE '^[[:space:]]*(#|$)' "$ALLOW_FILE" | tr '\n' ' ')"
+fi
+echo "claude-agents firewall active for $SUBNET"

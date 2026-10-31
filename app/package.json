@@ -1,0 +1,19 @@
+{
+  "name": "claude-agents",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted scheduled Claude agents (Agent SDK) with a hardened Docker setup",
+  "scripts": {
+    "start": "node runner.mjs",
+    "agents": "node cli.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.312",
+    "node-cron": "^4.2.1",
+    "zod": "^4.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
