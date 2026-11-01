@@ -1,5 +1,6 @@
 // Runs one agent: builds its sandboxed options from the database config and streams the result.
 // Used by the scheduler/UI server (runner.mjs) and the CLI (cli.mjs).
+// Claude models run here on the Claude Agent SDK; OpenAI models on Codex (codex.mjs, same safety model).
 //
 // Safety model (enforced by Claude Code, not by the prompt):
 //   - each agent only gets the built-in tools listed in its `tools` (others don't exist for it)
@@ -7,19 +8,22 @@
 //   - system paths, the database, logs, uploads of other agents, Claude's home and the app are denied
 //   - anything not pre-approved is refused (permissionMode "dontAsk"), never prompted
 //   - the Claude process gets a minimal environment, not the container's full env
-//   - MCP servers come only from the human-controlled registry (config/mcp-servers.mjs)
+//   - MCP servers come only from the human-controlled registry (config/mcp-servers.mjs),
+//     plus "self" (every agent: edit its own name, description and instructions; see agents-tool.mjs)
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { mkdir, appendFile } from "node:fs/promises";
 import path from "node:path";
-import { createAgentsServer } from "./agents-tool.mjs";
-import { turnsFor } from "./store.mjs";
+import { createAgentsServer, createSelfServer } from "./agents-tool.mjs";
+import { runCodex } from "./codex.mjs";
+import { turnsFor, providerOf } from "./store.mjs";
 
 const READ_TOOLS = new Set(["Read", "Glob", "Grep"]);
 const WRITE_TOOLS = new Set(["Write", "Edit"]);
 const STALE_RUN_MS = 2 * 60 * 60 * 1000;
 const LIMIT_LABEL = { five_hour: "5h", seven_day: "weekly", seven_day_opus: "weekly Opus", seven_day_sonnet: "weekly Sonnet", overage: "extra usage" };
 
+const CODEX_SESSION = "codex:"; // prefix of saved chat sessions that are Codex threads
 const kTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
 /** One log line from data the stream already carried: this run's tokens and the plan limit headroom. */
@@ -45,7 +49,7 @@ export function createEngine({ store, registry, dataDir, tz, log = console.log }
   function toolPolicy(agent) {
     const builtins = agent.tools.filter((t) => !t.startsWith("mcp__"));
     const mcpTools = agent.tools.filter((t) => t.startsWith("mcp__"));
-    const allowed = [...mcpTools];
+    const allowed = [...mcpTools, "mcp__self"];
     for (const t of builtins) {
       if (READ_TOOLS.has(t)) continue; // reads inside the workspace need no rule
       if (WRITE_TOOLS.has(t)) allowed.push("Edit(./**)"); // writes only inside the workspace
@@ -101,25 +105,29 @@ export function createEngine({ store, registry, dataDir, tz, log = console.log }
     const model = opts.model ?? agent.model;
     const effort = opts.effort ?? agent.effort;
     if (!agent.enabled) return { ok: false, result: `Agent "${name}" is disabled.`, model, effort };
+    const provider = providerOf(model);
+    if (provider === "claude" && !process.env.CLAUDE_CODE_OAUTH_TOKEN && !process.env.ANTHROPIC_API_KEY) {
+      return { ok: false, result: `No Claude credentials. Set CLAUDE_CODE_OAUTH_TOKEN in the stack's variables, or switch ${name} to an OpenAI model.`, model, effort };
+    }
     if (isRunning(name)) {
       log(name, "already running, skipped");
-      return { ok: false, result: `${name} is busy with another task right now. Try again in a moment.`, model, effort };
+      return { ok: false, busy: true, result: `${name} is busy with another task right now. Try again in a moment.`, model, effort };
     }
 
     const workdir = path.join(dataDir, "workspaces", name);
     const logDir = path.join(dataDir, "logs", name);
-    await mkdir(path.join(workdir, "reports"), { recursive: true });
-    await mkdir(logDir, { recursive: true });
     const logFile = path.join(logDir, `${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`);
 
-    const mcpServers = {};
-    for (const t of agent.tools.filter((t) => t.startsWith("mcp__"))) {
+    const agentsCtx = {
+      store, registry, caller: name, trigger, model, effort, depth,
+      askAgent: (n, m, d) => runAgent(n, { trigger: `agent:${name}`, message: m, depth: d }).then((r) => r.result),
+    };
+    const mcpServers = { self: createSelfServer(agentsCtx) };
+    for (const t of provider === "claude" ? agent.tools.filter((t) => t.startsWith("mcp__")) : []) {
       const server = t.slice(5);
+      if (server === "self") continue;
       if (server === "agents") {
-        mcpServers.agents = createAgentsServer({
-          store, registry, caller: name, model, effort, depth,
-          askAgent: (n, m, d) => runAgent(n, { trigger: `agent:${name}`, message: m, depth: d }).then((r) => r.result),
-        });
+        mcpServers.agents = createAgentsServer(agentsCtx);
       } else if (registry[server]) {
         mcpServers[server] = registry[server].config;
       } else {
@@ -127,13 +135,33 @@ export function createEngine({ store, registry, dataDir, tz, log = console.log }
       }
     }
 
+    // Recorded before the first await, so a request arriving meanwhile sees the agent as running.
     const runId = store.startRun(name, trigger);
     log(name, `starting (${trigger}, ${model}/${effort}, tools=${agent.tools.join(",") || "none"})`);
     const started = Date.now();
     let outcome = { ok: false, result: "No result.", model, effort };
     let record = { status: "error" };
+    const instructions = message && `${agent.prompt}\n\n---\n` +
+      `Your id is "${name}"${agent.displayName ? ` and your name is "${agent.displayName}"` : ""}. ` +
+      "If the human asks you to change your name, description or responsibilities, save it with your update_profile tool. " +
+      `You are being messaged directly (${trigger}). ` +
+      "Answer the request in the user message, using your tools as needed. Be concise; use short markdown. " +
+      "Always reply in the language the request is written in (e.g. Portuguese in, Portuguese out), " +
+      "even if your instructions above are in another language.";
 
-    const attempt = async (resume) => {
+    const codexAttempt = async (resume) => {
+      const r = await runCodex({
+        agent, model, effort, prompt: message ?? agent.prompt, instructions, images, resume, maxTurns: turnsFor(effort),
+        workdir, dataDir, registry, tz, agentsCtx, logFile, log, onProgress,
+      });
+      outcome = { ok: r.ok, result: r.result, model, effort, turns: r.turns };
+      record = { status: r.status, turns: r.turns, result: r.result?.slice(0, 4000), denials: [] };
+      if (chat && r.threadId) store.setSession(name, CODEX_SESSION + r.threadId);
+      log(name, `${r.ok ? "done" : `ended (${r.status})`} in ${((Date.now() - started) / 1000).toFixed(0)}s, ${r.turns} tool calls`);
+      log(name, usageLine(r.tokens, undefined, tz));
+    };
+
+    const claudeAttempt = async (resume) => {
       const stream = query({
         prompt: images.length ? userMessage(message ?? agent.prompt, images) : (message ?? agent.prompt),
         options: {
@@ -142,12 +170,7 @@ export function createEngine({ store, registry, dataDir, tz, log = console.log }
           effort,
           maxTurns: turnsFor(effort),
           ...toolPolicy(agent),
-          ...(message
-            ? { systemPrompt: `${agent.prompt}\n\n---\nYou are being messaged directly (${trigger}). ` +
-                "Answer the request in the user message, using your tools as needed. Be concise; use short markdown. " +
-                "Always reply in the language the request is written in (e.g. Portuguese in, Portuguese out), " +
-                "even if your instructions above are in another language." }
-            : {}),
+          ...(instructions ? { systemPrompt: instructions } : {}),
           ...(resume ? { resume } : {}),
           permissionMode: "dontAsk",
           mcpServers,
@@ -194,7 +217,14 @@ export function createEngine({ store, registry, dataDir, tz, log = console.log }
     };
 
     try {
-      const resume = chat ? store.getSession(name) : undefined;
+      await mkdir(path.join(workdir, "reports"), { recursive: true });
+      await mkdir(logDir, { recursive: true });
+      const attempt = provider === "claude" ? claudeAttempt : codexAttempt;
+      // A conversation continues only on the provider that started it.
+      const saved = chat ? store.getSession(name) : undefined;
+      const sameProvider = saved && saved.startsWith(CODEX_SESSION) === (provider === "openai");
+      if (saved && !sameProvider) log(name, `switched to ${provider === "claude" ? "Claude" : "OpenAI"}, starting a new conversation`);
+      const resume = sameProvider ? saved.replace(CODEX_SESSION, "") : undefined;
       try {
         await attempt(resume);
       } catch (err) {
@@ -218,7 +248,7 @@ export function createEngine({ store, registry, dataDir, tz, log = console.log }
 
 /** Load a JS config module that exports `name`, falling back to the example files. */
 export async function loadConfig(dir, file, exportName) {
-  const example = file.replace(/\.mjs$/, ".example.mjs");
+  const example = file.endsWith(".example.mjs") ? file : file.replace(/\.mjs$/, ".example.mjs");
   const defaults = path.join(import.meta.dirname, "defaults");
   for (const f of [path.join(dir, file), path.join(dir, example), path.join(defaults, example)]) {
     try {

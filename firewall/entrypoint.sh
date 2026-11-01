@@ -31,8 +31,7 @@ echo "using $IPT"
 touch /tmp/ready
 while :; do
   sleep 60 & wait $!
-  if ! "$IPT" -C DOCKER-USER -s "$SUBNET" -j CLAUDE-AGENTS 2>/dev/null \
-     || ! "$IPT" -C INPUT -s "$SUBNET" -j CLAUDE-AGENTS-IN 2>/dev/null; then
+  if ! "$FW" --check "$SUBNET"; then
     echo "rules missing, re-applying"
     "$FW" "$SUBNET" || rm -f /tmp/ready
   fi

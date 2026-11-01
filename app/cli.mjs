@@ -10,7 +10,7 @@ const CONFIG_DIR = process.env.CONFIG_DIR || "/app/config";
 const TZ = process.env.TZ || "UTC";
 const HUMAN = "human (cli)";
 
-const HELP = `agents: manage your Claude agents
+const HELP = `agents: manage your agents
 
   agents list                      all agents
   agents show <name>               full config incl. prompt
@@ -18,7 +18,7 @@ const HELP = `agents: manage your Claude agents
   agents proposal <id>             one proposal with its diff
   agents approve <id>              apply a proposal
   agents reject <id>               reject a proposal
-  agents set <name> model=<m> effort=<e>   e.g. model=opus effort=high
+  agents set <name> model=<m> effort=<e>   e.g. model=opus effort=high, or model=gpt-6.1-sol
   agents enable <name>             enable an agent
   agents disable <name>            disable an agent
   agents delete <name>             delete an agent (its workspace files stay)
@@ -29,7 +29,8 @@ const HELP = `agents: manage your Claude agents
   agents runs [name]               recent runs
   agents events                    audit log
 
-Changes are picked up by the scheduler within ~10 seconds.`;
+Changes are picked up by the scheduler within ~10 seconds.
+Use your ChatGPT plan for OpenAI models: codex login --device-auth`;
 
 const store = openStore(path.join(DATA_DIR, "agents.db"));
 const registry = (await loadConfig(CONFIG_DIR, "mcp-servers.mjs", "mcpServers")) ?? {};
@@ -83,7 +84,7 @@ try {
     case "approve":
     case "reject": {
       const id = Number(need(args[0], "proposal id"));
-      const before = store.get(store.proposal(id)?.agent);
+      const before = store.get(store.proposal(id)?.agent ?? fail(`no proposal #${args[0]}`));
       const p = store.decide(id, cmd === "approve", HUMAN, registry);
       if (cmd === "approve") {
         console.log(`✓ approved #${id}: ${p.kind} "${p.agent}"`);
@@ -111,7 +112,6 @@ try {
       break;
     case "run":
     case "ask": {
-      if (!process.env.CLAUDE_CODE_OAUTH_TOKEN && !process.env.ANTHROPIC_API_KEY) fail("no Claude credentials in this container");
       const name = need(args[0], "name");
       const message = cmd === "ask" ? need(args.slice(1).join(" ") || null, "message") : null;
       const log = (n, m) => console.error(`  [${n}] ${m}`);
@@ -126,7 +126,7 @@ try {
     case "import": {
       const onlyIdx = args.indexOf("--only");
       const only = onlyIdx !== -1 ? need(args[onlyIdx + 1], "agent name after --only") : null;
-      const fileArg = args.find((a, i) => !a.startsWith("--") && i !== onlyIdx + 1);
+      const fileArg = args.find((a, i) => !a.startsWith("--") && (onlyIdx === -1 || i !== onlyIdx + 1));
       const file = fileArg ? path.resolve(fileArg) : path.join(CONFIG_DIR, "agents.mjs");
       const { agents } = await import(file);
       for (const cfg of agents.filter((a) => !only || a.name === only)) {

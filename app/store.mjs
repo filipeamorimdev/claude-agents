@@ -2,6 +2,7 @@
 //
 // Tables
 //   agents         approved, live configuration (the only thing the runner executes)
+//                  display_name/description/prompt are the agent's profile, which it may edit itself (setProfile)
 //   proposals      changes suggested by agents, waiting for a human to approve/reject
 //   runs           one row per agent run
 //   events         audit log of every change and agent-to-agent interaction (mirrored to docker logs)
@@ -10,16 +11,23 @@
 //   groups         group chats: every member agent gets each message
 //
 // Agents can only ever create PROPOSALS. Only a human (CLI or UI) applies them.
+// Exception: an agent may edit its own profile (name shown in the UI, description, and its instructions
+// when the human asks it in a direct chat). That never changes its tools, schedule, model or effort.
 
 import { DatabaseSync } from "node:sqlite";
 import cron from "node-cron";
 
 // ---------- policy ----------
 
-export const MODELS = ["haiku", "sonnet", "opus"];
-// Effort = the SDK's reasoning effort (same levels as Claude Code) + a turn cap per run.
+// Claude models run on the Claude Agent SDK; the others on Codex with your ChatGPT plan (codex.mjs).
+export const CLAUDE_MODELS = ["haiku", "sonnet", "opus"];
+export const OPENAI_MODELS = (process.env.CODEX_MODELS ?? "gpt-6.1-sol,gpt-6-astra,gpt-6.1-terra,gpt-6-luna")
+  .split(",").map((m) => m.trim()).filter(Boolean);
+export const MODELS = [...CLAUDE_MODELS, ...OPENAI_MODELS];
+export const providerOf = (model) => (CLAUDE_MODELS.includes(model) ? "claude" : "openai");
+// Effort = the model's reasoning effort (same levels as Claude Code) + a turn cap per run.
 export const EFFORTS = { low: 10, medium: 25, high: 50, xhigh: 75, max: 100 };
-export const DEFAULTS = { model: "sonnet", effort: "medium" };
+export const DEFAULTS = { model: MODELS.includes(process.env.DEFAULT_MODEL) ? process.env.DEFAULT_MODEL : "sonnet", effort: "medium" };
 
 export const LIMITS = {
   maxAgents: 25,
@@ -90,6 +98,25 @@ export function validateAgent(cfg, actor, registry = {}, existingTools = []) {
 
   const enabled = cfg.enabled === undefined ? true : Boolean(cfg.enabled);
   return { errors, agent: { name, description, enabled, schedule, model, effort, tools, prompt } };
+}
+
+/** Validate an agent's profile edit. Only the fields passed are checked and returned. */
+export function validateProfile({ displayName, description, prompt }) {
+  const errors = [], profile = {};
+  if (displayName !== undefined) {
+    profile.displayName = String(displayName ?? "").replace(/\s+/g, " ").trim();
+    if (profile.displayName.length > 60) errors.push("display_name: at most 60 characters");
+  }
+  if (description !== undefined) {
+    profile.description = String(description ?? "").replace(/\s+/g, " ").trim();
+    if (profile.description.length > 300) errors.push("description: at most 300 characters");
+  }
+  if (prompt !== undefined) {
+    profile.prompt = String(prompt ?? "").trim();
+    if (profile.prompt.length < 20) errors.push("prompt: describe the agent's job (at least 20 characters)");
+    if (profile.prompt.length > LIMITS.promptMax) errors.push(`prompt: at most ${LIMITS.promptMax} characters`);
+  }
+  return { errors, profile };
 }
 
 // "0" -> 1, "0,30" -> 2, "*/5" -> 12, "*" -> 60, "10-20" -> 11
@@ -180,6 +207,10 @@ export function openStore(file) {
     );
     CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
   `);
+  // migration: a display name the agent can change (the name column stays its id)
+  if (!db.prepare("PRAGMA table_info(agents)").all().some((c) => c.name === "display_name")) {
+    db.exec("ALTER TABLE agents ADD COLUMN display_name TEXT NOT NULL DEFAULT ''");
+  }
   // migration: effort replaces max_turns
   if (!db.prepare("PRAGMA table_info(agents)").all().some((c) => c.name === "effort")) {
     db.exec("ALTER TABLE agents ADD COLUMN effort TEXT NOT NULL DEFAULT 'medium'");
@@ -189,7 +220,7 @@ export function openStore(file) {
   }
 
   const row2agent = (r) => r && {
-    name: r.name, description: r.description, enabled: !!r.enabled, schedule: r.schedule,
+    name: r.name, displayName: r.display_name ?? "", description: r.description, enabled: !!r.enabled, schedule: r.schedule,
     model: r.model, effort: r.effort, maxTurns: turnsFor(r.effort), tools: JSON.parse(r.tools), prompt: r.prompt,
     createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
   };
@@ -244,6 +275,21 @@ export function openStore(file) {
       store.event(actor, "settings", name, diff(a, { ...a, ...next }));
       bump();
       return true;
+    },
+
+    /** The agent's own profile edit (already validated). Returns the names of the fields that changed. */
+    setProfile(name, profile, actor) {
+      const a = store.get(name);
+      if (!a) throw new Error(`no agent "${name}"`);
+      const changes = {};
+      for (const [k, v] of Object.entries(profile)) if (v !== undefined && v !== a[k]) changes[k] = { from: a[k], to: v };
+      if (!Object.keys(changes).length) return [];
+      const next = { ...a, ...profile };
+      db.prepare("UPDATE agents SET display_name=?, description=?, prompt=?, updated_at=? WHERE name=?")
+        .run(next.displayName, next.description, next.prompt, now(), name);
+      store.event(actor, "update", name, changes);
+      bump();
+      return Object.keys(changes);
     },
 
     setEnabled(name, enabled, actor) {

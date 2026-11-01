@@ -5,8 +5,15 @@
 # Required
 #   DATA_DIR                  absolute host folder for workspaces, logs, browser logins and config
 #   UI_PASSWORD               chat UI login
-#   CLAUDE_CODE_OAUTH_TOKEN   from `claude setup-token` (Pro/Max plan)   } set one
-#   ANTHROPIC_API_KEY         from console.anthropic.com (billed per token) }
+#   CLAUDE_CODE_OAUTH_TOKEN   from `claude setup-token` (Pro/Max plan)   } set one, or use
+#   ANTHROPIC_API_KEY         from console.anthropic.com (billed per token) } your ChatGPT plan:
+#
+# ChatGPT plan (OpenAI models through Codex): set AGENTS_SECCOMP=unconfined, redeploy, then sign in
+# once with `docker exec -it claude-agents codex login --device-auth`. The login is kept in DATA_DIR.
+#   AGENTS_SECCOMP (builtin)  "unconfined" lets Codex's sandbox start (it needs user namespaces)
+#   CODEX_API_KEY             an OpenAI API key instead of the ChatGPT login (billed per token)
+#   CODEX_MODELS              OpenAI models to offer (gpt-6.1-sol,gpt-6-astra,gpt-6.1-terra,gpt-6-luna)
+#   DEFAULT_MODEL (sonnet)    model for new agents, e.g. gpt-6.1-sol if you only use ChatGPT
 #
 # Optional (default)
 #   TZ (UTC)                  timezone for schedules
@@ -84,6 +91,9 @@ services:
     environment:
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CODEX_API_KEY: ${CODEX_API_KEY:-}
+      CODEX_MODELS: ${CODEX_MODELS:-gpt-6.1-sol,gpt-6-astra,gpt-6.1-terra,gpt-6-luna}
+      DEFAULT_MODEL: ${DEFAULT_MODEL:-sonnet}
       TZ: ${TZ:-UTC}
       DATA_DIR: /data
       HOME: /data/home
@@ -100,6 +110,9 @@ services:
       - ${DATA_DIR}/agents:/data
     # --- hardening ---
     <<: *hardening
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${AGENTS_SECCOMP:-builtin}   # "unconfined" for OpenAI models (Codex's sandbox)
     read_only: true
     tmpfs:
       - /tmp:rw,exec,nosuid,size=256m

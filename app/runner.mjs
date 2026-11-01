@@ -11,6 +11,7 @@ import { openStore, validateAgent } from "./store.mjs";
 import { createEngine, loadConfig } from "./engine.mjs";
 import { describeEvent } from "./events.mjs";
 import { startUi } from "./ui-server.mjs";
+import { prepareCodexHome, codexReady, LOGIN_HINT } from "./codex.mjs";
 
 const DATA_DIR = process.env.DATA_DIR || "/data";
 const CONFIG_DIR = process.env.CONFIG_DIR || "/app/config";
@@ -18,9 +19,11 @@ const TZ = process.env.TZ || "UTC";
 const UI_PORT = Number(process.env.UI_PORT || 8090);
 const log = (name, msg) => console.log(`${new Date().toISOString()} [${name}] ${msg}`);
 
-if (!process.env.CLAUDE_CODE_OAUTH_TOKEN && !process.env.ANTHROPIC_API_KEY) {
-  console.error("No credentials: set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the stack's variables.");
-  process.exit(1);
+// Keeps running without credentials, so you can still sign in with ChatGPT inside the container.
+await prepareCodexHome();
+if (!process.env.CLAUDE_CODE_OAUTH_TOKEN && !process.env.ANTHROPIC_API_KEY && !codexReady()) {
+  console.error("No credentials yet: set CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) in the stack's variables, " +
+    `or sign in with ChatGPT: ${LOGIN_HINT}`);
 }
 
 const store = openStore(path.join(DATA_DIR, "agents.db"));
@@ -75,17 +78,19 @@ const jobs = new Map(); // name -> { schedule, task }
 let lastVersion = -1;
 
 async function scheduledRun(name) {
+  // Busy (e.g. answering a chat): skip this time, without posting or clearing the chat's "working" state.
+  if (engine.isRunning(name)) { log(name, "still busy, scheduled run skipped"); return; }
   bus.emit("running", { agent: name, running: true });
   try {
     const started = new Date().toISOString();
     const r = await engine.runAgent(name, { trigger: "schedule" });
-    if (r.result) {
+    if (r.result && !r.busy) {
       bus.emit("message", store.addMessage(name, "agent", name, r.result, {
         meta: { model: r.model, effort: r.effort, turns: r.turns, ok: r.ok, task: true, scheduled: true, proposals: store.proposalIdsSince(name, started) },
       }));
     }
   } finally {
-    bus.emit("running", { agent: name, running: false });
+    bus.emit("running", { agent: name, running: engine.isRunning(name) });
   }
 }
 

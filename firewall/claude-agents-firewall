@@ -3,6 +3,7 @@
 #
 #   claude-agents-firewall <subnet>            apply rules (default 172.30.0.0/24)
 #   claude-agents-firewall --remove <subnet>   remove rules
+#   claude-agents-firewall --check <subnet>    exit 0 if the rules are in place
 #
 # Containers on <subnet> can still reach the internet (Claude API, websites) and each
 # other. They cannot open connections to:
@@ -12,16 +13,22 @@
 # Exceptions: "IP:PORT" (or just "IP") entries, e.g. "192.168.1.50:8123" for Home Assistant,
 # separated by commas or spaces in $FIREWALL_ALLOW (or one per line in $ALLOW_FILE).
 # Normally run by the firewall container (see entrypoint.sh); $IPT picks the iptables backend.
+#
+# Each install gets its own chains, named after its subnet, so several installs on one host
+# (each with its own AGENTS_SUBNET) don't overwrite or remove each other's rules.
 
 set -eu
-FWD=CLAUDE-AGENTS
-IN=CLAUDE-AGENTS-IN
 ALLOW_FILE=${ALLOW_FILE:-/etc/claude-agents/firewall-allow}
 IPT=${IPT:-iptables}
 
-REMOVE=0
-if [ "${1:-}" = "--remove" ]; then REMOVE=1; shift; fi
+MODE=apply
+case "${1:-}" in --remove) MODE=remove; shift ;; --check) MODE=check; shift ;; esac
 SUBNET="${1:-172.30.0.0/24}"
+TAG=$(echo "$SUBNET" | tr './' '--')   # 172.30.0.0/24 -> 172-30-0-0-24 (chain names: at most 28 chars)
+FWD="CLAUDE-$TAG"
+IN="CLAUDE-$TAG-IN"
+LEGACY_FWD=CLAUDE-AGENTS                # shared chains used by older versions
+LEGACY_IN=CLAUDE-AGENTS-IN
 
 allow_list() {
   { [ -f "$ALLOW_FILE" ] && cat "$ALLOW_FILE"; echo "${FIREWALL_ALLOW:-}" | tr ', ' '\n\n'; } \
@@ -30,13 +37,27 @@ allow_list() {
 
 command -v "$IPT" >/dev/null 2>&1 || { echo "$IPT not found; cannot install the LAN firewall" >&2; exit 1; }
 
+if [ "$MODE" = check ]; then
+  "$IPT" -C DOCKER-USER -s "$SUBNET" -j "$FWD" 2>/dev/null && "$IPT" -C INPUT -s "$SUBNET" -j "$IN" 2>/dev/null && exit 0
+  exit 1
+fi
+
+# Older versions: detach this subnet from the shared chains, and delete them once no install uses them
+while "$IPT" -D DOCKER-USER -s "$SUBNET" -j "$LEGACY_FWD" 2>/dev/null; do :; done
+while "$IPT" -D INPUT -s "$SUBNET" -j "$LEGACY_IN" 2>/dev/null; do :; done
+for chain in "$LEGACY_FWD" "$LEGACY_IN"; do
+  if ! "$IPT" -S 2>/dev/null | grep -qE -- "-j $chain( |\$)"; then
+    "$IPT" -F "$chain" 2>/dev/null && "$IPT" -X "$chain" 2>/dev/null || true
+  fi
+done
+
 # Detach and clear our chains (safe to run repeatedly)
 while "$IPT" -D DOCKER-USER -s "$SUBNET" -j "$FWD" 2>/dev/null; do :; done
 while "$IPT" -D INPUT -s "$SUBNET" -j "$IN" 2>/dev/null; do :; done
 "$IPT" -F "$FWD" 2>/dev/null || true
 "$IPT" -F "$IN" 2>/dev/null || true
 
-if [ "$REMOVE" = 1 ]; then
+if [ "$MODE" = remove ]; then
   "$IPT" -X "$FWD" 2>/dev/null || true
   "$IPT" -X "$IN" 2>/dev/null || true
   echo "claude-agents firewall removed"

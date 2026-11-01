@@ -8,7 +8,8 @@
 //             WebSearch, WebFetch, Bash. MCP servers from config/mcp-servers.mjs: "mcp__<name>".
 //             "mcp__agents" lets an agent manage the team (propose agents, ask other agents).
 //             Read/Write are fenced to the agent's own workspace folder by the runner.
-// model     : "sonnet" is cheapest on your Pro limits; use "opus" only when needed
+// model     : "sonnet" is cheapest on your Pro limits; use "opus" only when needed.
+//             OpenAI models (e.g. "gpt-6.1-sol") use your ChatGPT plan: see the README.
 // effort    : low | medium | high | xhigh | max. Reasoning effort + turn cap (10/25/50/75/100).
 //             Model and effort are a starting point: the chat UI remembers what you pick per agent.
 // mcpServers: optional MCP servers (browser, Home Assistant, ...)

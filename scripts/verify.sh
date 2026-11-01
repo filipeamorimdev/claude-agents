@@ -22,7 +22,19 @@ x claude-agents 'test -e /run/secrets || test -n "${BROWSER_SECRETS:-}"' && bad 
 x claude-agents 'test -S /var/run/docker.sock' && bad "docker socket is mounted!" || ok "no docker socket"
 caps=$(docker inspect -f '{{.HostConfig.CapDrop}}' claude-agents)
 [[ "$caps" == *ALL* ]] && ok "all Linux capabilities dropped" || bad "capabilities not dropped ($caps)"
-x claude-agents 'test -n "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY"' && ok "Claude credentials present" || bad "no Claude credentials (set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)"
+claude=0 chatgpt=0
+x claude-agents 'test -n "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY"' && claude=1 && ok "Claude credentials present"
+x claude-agents 'test -n "${CODEX_API_KEY:-}" || test -f "${CODEX_HOME:-$HOME/.codex}/auth.json"' && chatgpt=1 && ok "signed in with ChatGPT (OpenAI models)"
+[ "$claude$chatgpt" = 00 ] && bad "no credentials (set CLAUDE_CODE_OAUTH_TOKEN, or: docker exec -it claude-agents codex login --device-auth)"
+if [[ "$(docker inspect -f "{{json .HostConfig.SecurityOpt}}" claude-agents)" == *seccomp=unconfined* ]] || [ "$chatgpt" = 1 ]; then
+  # A sandboxed command must not see the logins, logs or database (same rules codex.mjs applies)
+  probe='cd /data && codex sandbox -c "permissions={ \"p\" = { \"extends\" = \":read-only\", \"filesystem\" = { \"/data/home\" = \"deny\", \"/app\" = \"deny\" } } }" -P p -C /data --'
+  if x claude-agents "$probe true"; then
+    x claude-agents "$probe ls /data/home" && bad "Codex sandbox doesn't hide private files" || ok "Codex sandbox works and hides private files"
+  else
+    bad "Codex sandbox can't start (set AGENTS_SECCOMP=unconfined; on Ubuntu 23.10+ hosts see the README)"
+  fi
+fi
 x claude-agents 'agents list' && ok "agent database readable ($(docker exec claude-agents sh -c 'agents list | tail -n +2 | grep -c .') agents)" || bad "agents CLI / database not working"
 
 echo "chat UI"

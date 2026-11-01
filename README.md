@@ -8,7 +8,8 @@ and can propose new agents for you to approve.
 - A 64-bit Linux server (NAS, Raspberry Pi 4/5, mini PC) with Docker and Docker Compose v2,
   or a Mac with Docker Desktop to try it out (see [On a Mac](#on-a-mac))
 - 4 GB RAM (8 GB with the browser agent)
-- Your own Claude Pro/Max subscription or Anthropic API key
+- Your own Claude Pro/Max subscription or Anthropic API key, and/or a ChatGPT Plus/Pro plan
+  (see [Use your ChatGPT plan](#use-your-chatgpt-plan))
 
 ## 1. Get a Claude token
 
@@ -20,6 +21,7 @@ claude setup-token
 ```
 
 Copy the token it prints (`sk-ant-oat01-…`). Use your own: runs count against that account.
+Only using ChatGPT? Skip this step and see [Use your ChatGPT plan](#use-your-chatgpt-plan).
 
 ## 2. Install
 
@@ -94,9 +96,47 @@ docker compose up -d
 Open `http://<server-ip>:8090` and sign in.
 
 - **Chat with an agent:** choose the model and effort under the message box. The agent remembers them.
-- **Create an agent:** ask `agent-architect`, then tap **Approve** under its reply (or use **Approvals**).
-- **Groups:** the button next to "Agents" creates a group chat. Every agent in it gets each message.
-- Type `/help` in any chat for the commands, and `@` to mention an agent.
+- **Create an agent or a group:** tap the button next to "Agents" and pick **Agent** or **Group**.
+  A new agent gets a random name (change it if you like); write what it should do, pick what it can
+  use and tap **Save**. Or ask `agent-architect` to design one, then tap **Approve** under its reply
+  (or use **Approvals**).
+- **Groups:** a group chat sends every message to each agent in it. Tap a group's name to edit it.
+- **Commands anywhere:** type `/` in the search box for commands that aren't tied to one chat, e.g.
+  `/ask release-watch what's new?`, `/run`, `/enable`, `/disable`, `/new`, `/group`.
+- Type `/help` in any chat for that chat's commands, and `@` to mention an agent.
+
+## Use your ChatGPT plan
+
+Agents can also run on OpenAI models (GPT-6.1 Sol, Astra, Terra, Luna) through
+[Codex](https://developers.openai.com/codex), counting against your ChatGPT plan instead of API billing.
+Claude and OpenAI agents can live side by side; pick the model per agent in the chat.
+
+1. Set `AGENTS_SECCOMP=unconfined` and redeploy (`install.sh` asks, and does this for you).
+   Codex sandboxes every command it runs, and its sandbox needs user namespaces, which Docker's
+   default seccomp filter blocks. The container stays non-root with all capabilities dropped.
+2. Sign in once (it prints a code to enter at the link it shows):
+
+   ```bash
+   docker exec -it claude-agents codex login --device-auth
+   ```
+
+   The login is saved in `DATA_DIR/agents/home/.codex` and refreshes itself. Use your own account.
+3. Pick a GPT model under the message box, or `docker exec claude-agents agents set release-watch model=gpt-6.1-sol`.
+   ChatGPT-only? Also set `DEFAULT_MODEL=gpt-6.1-sol` for new agents.
+
+Differences from Claude agents:
+
+- Codex works through shell commands, so Read/Write become sandboxed commands: an agent sees its
+  own folder (writable only with Write or Edit) and nothing private (logins, logs, database,
+  other agents). It gets network only with WebFetch, and no shell at all without file tools.
+- Effort sets the reasoning level and caps the tool calls Codex reports per run (MCP calls, file
+  edits, web searches; low 10 … max 100). Shell commands Codex runs through its code tool aren't
+  reported, so they don't count. Codex may also start helper sub-agents; they run in the same sandbox.
+- Switching an agent between Claude and OpenAI starts a new conversation.
+- `CODEX_API_KEY` uses an OpenAI API key instead (billed per token); `CODEX_MODELS` changes the list.
+- Ubuntu 23.10+ hosts also restrict user namespaces with AppArmor. If `verify.sh` says the Codex
+  sandbox can't start, run `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`
+  (add it to `/etc/sysctl.d/` to keep it).
 
 ## Update
 
@@ -137,11 +177,14 @@ sudo ./install.sh --uninstall           # add --purge to also delete data and se
 ## Good to know
 
 - Use the chat on your home network or through a VPN. Don't expose it to the internet.
-- Agents can't reach your LAN, can't use a shell, and only see their own folder.
+- Agents can't reach your LAN and only see their own folder. Claude agents get a shell only if you
+  grant Bash; OpenAI agents run sandboxed commands (see [Use your ChatGPT plan](#use-your-chatgpt-plan)).
   To let them reach one device (e.g. Home Assistant), set `FIREWALL_ALLOW=192.168.1.50:8123`.
 - Agents and MCP servers are configured in `DATA_DIR/config/` (created on first start).
   A variable an MCP server needs (like `HA_TOKEN`) must also be listed in `compose.yaml`.
 - Browser logins: use passwords unique to those sites, and no 2FA seeds (the agent asks you for codes).
+- Two installs on one host: give each its own `AGENTS_SUBNET` and `UI_PORT`, and its own container
+  names. Each install's firewall rules are named after its subnet, so they don't overwrite each other.
 - Logs: `docker logs -f claude-agents`. Check the safeguards: `sudo bash scripts/verify.sh`.
 
 ## License

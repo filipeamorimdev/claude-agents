@@ -7,7 +7,8 @@ import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MODELS, EFFORTS, turnsFor, diff } from "./store.mjs";
+import { MODELS, CLAUDE_MODELS, OPENAI_MODELS, EFFORTS, GRANTABLE_BUILTINS, turnsFor, diff, validateAgent } from "./store.mjs";
+import { codexReady } from "./codex.mjs";
 import { describeEvent } from "./events.mjs";
 
 const UI_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), "ui", "index.html");
@@ -64,12 +65,24 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
   });
   const json = async (req) => {
     if (!(req.headers["content-type"] ?? "").includes("application/json")) throw Object.assign(new Error("expected JSON"), { code: 415 });
-    return JSON.parse((await readBody(req, 1024 * 1024)).toString() || "{}");
+    const body = (await readBody(req, 1024 * 1024)).toString() || "{}";
+    try { return JSON.parse(body); } catch { throw Object.assign(new Error("invalid JSON"), { code: 400 }); }
   };
   const agentView = (a, running) => ({
-    name: a.name, description: a.description, enabled: a.enabled, schedule: a.schedule,
+    name: a.name, displayName: a.displayName, description: a.description, enabled: a.enabled, schedule: a.schedule,
     model: a.model, effort: a.effort, maxTurns: a.maxTurns, tools: a.tools, running: running.includes(a.name),
   });
+  // Tools the UI may grant to a new agent (Bash and mcp__agents stay CLI-only).
+  const uiTools = () => [...GRANTABLE_BUILTINS, ...Object.keys(engine.registry).map((k) => `mcp__${k}`)];
+  // Models whose provider has credentials (all of them while neither does, so the picker isn't empty).
+  const modelGroups = () => {
+    const groups = [
+      { label: "Claude", models: CLAUDE_MODELS, ready: Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY) },
+      { label: "ChatGPT", models: OPENAI_MODELS, ready: codexReady() },
+    ].filter((g) => g.models.length);
+    const ready = groups.filter((g) => g.ready);
+    return (ready.length ? ready : groups).map(({ label, models }) => ({ label, models }));
+  };
   const addMessage = (...args) => { const m = store.addMessage(...args); bus.emit("message", m); return m; };
   // A reply that made suggestions carries them (current status included), so the chat can show Approve/Reject under it.
   function withProposals(m) {
@@ -110,11 +123,12 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
         images, chat: resumeChat, model, effort,
         onProgress: (p) => broadcast("progress", { agent, chat, ...p }),
       });
-      addMessage(chat, "agent", agent, r.result, {
+      if (r.busy) addMessage(chat, "system", "system", r.result);
+      else addMessage(chat, "agent", agent, r.result, {
         meta: { model: r.model, effort: r.effort, turns: r.turns, ok: r.ok, proposals: store.proposalIdsSince(agent, started) },
       });
     } finally {
-      bus.emit("running", { agent, running: false });
+      bus.emit("running", { agent, running: engine.isRunning(agent) });
     }
   }
 
@@ -145,9 +159,28 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
       agents: store.list().map((a) => ({ ...agentView(a, running), last: last[a.name] ?? null })),
       groups: store.groups().map((g) => ({ ...g, last: last[`group:${g.id}`] ?? null })),
       proposals: store.proposals("open").length,
-      models: MODELS,
+      models: modelGroups().flatMap((g) => g.models),
+      modelGroups: modelGroups(),
+      tools: uiTools(),
       efforts: Object.fromEntries(Object.keys(EFFORTS).map((k) => [k, turnsFor(k)])),
     });
+  });
+
+  // Create an on-demand agent from the UI. Same rules as config/agents.mjs, minus the human-only tools.
+  route("POST", "/api/agents", async (req, res) => {
+    const { name = "", prompt = "", tools = [] } = await json(req);
+    const list = Array.isArray(tools) ? tools.map(String) : [];
+    const blocked = list.filter((t) => !uiTools().includes(t));
+    if (blocked.length) return send(res, 400, { error: `Can't grant ${blocked.join(", ")} from here. Use the agents CLI.` });
+    const firstLine = String(prompt).trim().split("\n")[0].replace(/\s+/g, " ");
+    const { errors, agent } = validateAgent({
+      name: String(name).trim().toLowerCase().replace(/[\s_]+/g, "-"), prompt, tools: list, schedule: null,
+      description: firstLine.length > 120 ? `${firstLine.slice(0, 119)}…` : firstLine,
+    }, "human", engine.registry);
+    if (errors.length) return send(res, 400, { error: errors.join("; ") });
+    if (store.get(agent.name)) return send(res, 409, { error: `There is already an agent called ${agent.name}` });
+    try { store.upsert(agent, "human (ui)"); } catch (e) { return send(res, 409, { error: e.message }); }
+    send(res, 200, { agent: agentView(store.get(agent.name), []) });
   });
 
   route("GET", "/api/agents/([a-z0-9-]+)", (req, res, [name]) => {
@@ -172,7 +205,7 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
         .then((r) => addMessage(name, "agent", name, r.result, {
           meta: { model: r.model, effort: r.effort, turns: r.turns, ok: r.ok, task: true, proposals: store.proposalIdsSince(name, started) },
         }))
-        .finally(() => bus.emit("running", { agent: name, running: false }));
+        .finally(() => bus.emit("running", { agent: name, running: engine.isRunning(name) }));
     }
     send(res, 200, { ok: true });
   });
@@ -265,13 +298,14 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
       if (!g || !g.members.includes(name)) continue; // group deleted or member removed meanwhile
       if (!agent) { addMessage(chat, "system", "system", `${name} no longer exists and didn't get this message.`); continue; }
       if (!agent.enabled) { addMessage(chat, "system", "system", `${name} is turned off and didn't get this message.`); continue; }
-      const others = g.members.filter((m) => m !== name).map((m) => `${m} (${store.get(m)?.description || "agent"})`);
+      const label = (m) => store.get(m)?.displayName ? `${m} "${store.get(m).displayName}"` : m;
+      const others = g.members.filter((m) => m !== name).map((m) => `${label(m)} (${store.get(m)?.description || "agent"})`);
       const history = store.messages(chat, messageId + 1, GROUP_HISTORY).filter((m) => m.role !== "system")
         .map((m) => `[${m.role === "human" ? "human" : m.author}] ${m.text.slice(0, 1500)}`);
       const later = store.messages(chat, null, GROUP_HISTORY).filter((m) => m.id > messageId && m.role === "agent")
         .map((m) => `[${m.author}] ${m.text.slice(0, 1500)}`);
       const prompt = [
-        `You are ${name}, in the group chat "${g.name}" with the human and these agents: ${others.join(", ")}.`,
+        `You are ${label(name)}, in the group chat "${g.name}" with the human and these agents: ${others.join(", ")}.`,
         "Every member gets each message from the human and answers in the group, one after another.",
         "", "Conversation (oldest first):", ...history, ...later, "",
         `Answer the human's latest message as ${name}, within your own job. Build on what the others already said instead of repeating it. ` +
