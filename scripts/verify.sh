@@ -39,9 +39,10 @@ x claude-agents 'agents list' && ok "agent database readable ($(docker exec clau
 
 echo "chat UI"
 UI_PORT=$(docker port claude-agents 8090/tcp 2>/dev/null | head -1 | awk -F: '{print $NF}'); UI_PORT=${UI_PORT:-8090}
-code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$UI_PORT/" 2>/dev/null)
-[ "$code" = 200 ] && ok "UI answers on port $UI_PORT" || bad "UI not reachable on port $UI_PORT (got $code; is UI_PASSWORD set?)"
-code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$UI_PORT/api/state" 2>/dev/null)
+UI=http; curl -sk -o /dev/null "https://127.0.0.1:$UI_PORT/" 2>/dev/null && UI=https   # config/tls certificate
+code=$(curl -sk -o /dev/null -w '%{http_code}' "$UI://127.0.0.1:$UI_PORT/" 2>/dev/null)
+[ "$code" = 200 ] && ok "UI answers on port $UI_PORT ($UI)" || bad "UI not reachable on port $UI_PORT (got $code; is UI_PASSWORD set?)"
+code=$(curl -sk -o /dev/null -w '%{http_code}' "$UI://127.0.0.1:$UI_PORT/api/state" 2>/dev/null)
 [ "$code" = 401 ] && ok "UI requires the password" || bad "UI API answered $code without a password!"
 
 echo "firewall container"

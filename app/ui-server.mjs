@@ -1,7 +1,10 @@
 // Web UI: a WhatsApp-style chat with your agents, served from the agents container.
 // Plain node:http, no framework. Password login (UI_PASSWORD), live updates over SSE.
+// HTTPS when a certificate is given (tls), which phones need for push notifications.
+// Also an installable web app (manifest + service worker) so it can get native push notifications.
 
 import http from "node:http";
+import https from "node:https";
 import crypto from "node:crypto";
 import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
@@ -10,8 +13,17 @@ import { fileURLToPath } from "node:url";
 import { MODELS, CLAUDE_MODELS, OPENAI_MODELS, EFFORTS, GRANTABLE_BUILTINS, turnsFor, diff, validateAgent } from "./store.mjs";
 import { codexReady } from "./codex.mjs";
 import { describeEvent } from "./events.mjs";
+import { vapidKeys, connect, validateSubscription, sendCode, checkCode, testDevice, deviceView } from "./notify.mjs";
+import { iconPng } from "./icon.mjs";
 
-const UI_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), "ui", "index.html");
+const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "ui");
+const UI_FILE = path.join(UI_DIR, "index.html");
+// Served without login: nothing private in them. The service worker must sit at the root to cover the whole app.
+const STATIC = {
+  "/sw.js": { file: "sw.js", type: "text/javascript; charset=utf-8" },
+  "/manifest.webmanifest": { file: "manifest.webmanifest", type: "application/manifest+json" },
+};
+const ICONS = { "/icon-192.png": 192, "/icon-512.png": 512, "/apple-touch-icon.png": 180 };
 const NAME_RE = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/;
 const IMAGE_TYPES = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
 const MAX_UPLOAD = 10 * 1024 * 1024;
@@ -22,7 +34,7 @@ const GROUP_WAIT_MS = 15 * 60e3;    // how long a group message waits for a busy
 const GROUP_HISTORY = 20;           // recent group messages each member sees
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export function startUi({ store, engine, dataDir, bus, port, password, log }) {
+export function startUi({ store, engine, dataDir, bus, port, password, log, tls = null }) {
   // ---------- auth ----------
   let secret = store.getMeta("ui_secret");
   if (!secret) { secret = crypto.randomBytes(32).toString("hex"); store.setMeta("ui_secret", secret); }
@@ -32,7 +44,7 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
 
   const sessionCookie = () => {
     const exp = String(Date.now() + SESSION_DAYS * 864e5);
-    return `${COOKIE}=${exp}.${sign(exp)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_DAYS * 86400}`;
+    return `${COOKIE}=${exp}.${sign(exp)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_DAYS * 86400}${tls ? "; Secure" : ""}`;
   };
   const authed = (req) => {
     const m = (req.headers.cookie ?? "").match(new RegExp(`${COOKIE}=(\\d+)\\.([a-f0-9]{64})`));
@@ -163,6 +175,8 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
       modelGroups: modelGroups(),
       tools: uiTools(),
       efforts: Object.fromEntries(Object.keys(EFFORTS).map((k) => [k, turnsFor(k)])),
+      devices: store.devices().map(deviceView),
+      vapidKey: vapidKeys(store).publicKey,
     });
   });
 
@@ -352,6 +366,38 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
     } catch (e) { send(res, 409, { error: e.message }); }
   });
 
+  // Push devices: same rules as `agents devices` (notify.mjs). This browser subscribes, then confirms with the notification it gets.
+  const device = (name) => store.device(name) ?? (() => { throw Object.assign(new Error(`No device called ${name}`), { code: 404 }); })();
+  const unreachable = (e) => Object.assign(e, { code: 502 }); // the push service refused or didn't answer
+  route("POST", "/api/devices", async (req, res) => {
+    const { name = "", pair = "", subscription, platform = "" } = await json(req);
+    const r = await connect(store, { name: String(name).trim().toLowerCase().replace(/[\s_]+/g, "-"), pair: String(pair).trim(), subscription, platform }, "human (ui)");
+    send(res, 200, { device: deviceView(r.device), error: r.error });
+  });
+  // From the service worker when the browser replaces its subscription: same device, still confirmed.
+  route("POST", "/api/devices/renew", async (req, res) => {
+    const { old = "", subscription } = await json(req);
+    send(res, store.renewDevice(String(old), validateSubscription(subscription)) ? 200 : 404, { ok: true });
+  });
+  route("POST", "/api/devices/([a-z0-9-]+)/(code|verify|test)", async (req, res, [name, action]) => {
+    const d = device(name);
+    if (action === "code") {
+      if (d.verifiedAt) return send(res, 409, { error: `${name} is already confirmed` });
+      await sendCode(store, name).catch((e) => { throw unreachable(e); });
+    }
+    if (action === "verify") {
+      const { code = "" } = await json(req);
+      try { checkCode(store, name, String(code), "human (ui)"); } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+    if (action === "test") await testDevice(store, name).catch((e) => { throw unreachable(e); });
+    send(res, 200, { device: deviceView(store.device(name)) });
+  });
+  route("DELETE", "/api/devices/([a-z0-9-]+)", (req, res, [name]) => {
+    device(name);
+    store.removeDevice(name, "human (ui)");
+    send(res, 200, { ok: true });
+  });
+
   route("GET", "/api/stream", (req, res) => {
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" });
     res.write(`event: hello\ndata: {}\n\n`);
@@ -361,7 +407,8 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
   });
 
   // ---------- server ----------
-  const server = http.createServer(async (req, res) => {
+  const icons = {}; // drawn once, on first request
+  async function handle(req, res) {
     const url = new URL(req.url, "http://x");
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "no-referrer");
@@ -372,6 +419,16 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
           "Content-Security-Policy": "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'",
         });
         return res.end(await readFile(UI_FILE));
+      }
+      if (req.method === "GET" && STATIC[url.pathname]) {
+        const { file, type } = STATIC[url.pathname];
+        res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-cache" });
+        return res.end(await readFile(path.join(UI_DIR, file)));
+      }
+      if (req.method === "GET" && ICONS[url.pathname]) {
+        icons[url.pathname] ??= iconPng(ICONS[url.pathname]);
+        res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" });
+        return res.end(icons[url.pathname]);
       }
       if (!url.pathname.startsWith("/api/")) return send(res, 404, { error: "not found" });
       const open = url.pathname === "/api/login" || url.pathname === "/api/me";
@@ -385,7 +442,8 @@ export function startUi({ store, engine, dataDir, bus, port, password, log }) {
       if (!res.headersSent) send(res, e.code >= 400 && e.code < 600 ? e.code : 500, { error: e.message });
       if (!(e.code >= 400 && e.code < 500)) log("ui", `error ${req.method} ${url.pathname}: ${e.message}`);
     }
-  });
-  server.listen(port, "0.0.0.0", () => log("ui", `chat UI listening on port ${port}`));
+  }
+  const server = tls ? https.createServer(tls, handle) : http.createServer(handle);
+  server.listen(port, "0.0.0.0", () => log("ui", `chat UI listening on port ${port} (${tls ? "https" : "http"})`));
   return server;
 }

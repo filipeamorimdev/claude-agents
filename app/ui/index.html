@@ -6,6 +6,10 @@
 <meta name="theme-color" content="#EEF1F5" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#121722" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Agents">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <title>Agents</title>
 <style>
 :root {
@@ -262,6 +266,9 @@ details.prompt pre { white-space: pre-wrap; background: var(--surface-2); border
   <aside class="side">
     <div class="side-head">
       <h1>Agents</h1>
+      <button class="icon-btn" id="devices-btn" title="Push notifications" aria-label="Push notifications">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>
+      </button>
       <button class="icon-btn" id="new-agent" title="New agent or group" aria-label="New agent or group">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 20c0-3 2.7-5 6-5 1.4 0 2.6.3 3.6.9M18 14v6M15 17h6"/></svg>
       </button>
@@ -440,7 +447,7 @@ const EFFORT_LABEL = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra
 
 async function loadState() {
   const st = await api("GET", "/api/state");
-  Object.assign(S, { agents: st.agents, groups: st.groups, models: st.models, modelGroups: st.modelGroups, efforts: st.efforts, tools: st.tools, proposals: st.proposals });
+  Object.assign(S, { agents: st.agents, groups: st.groups, models: st.models, modelGroups: st.modelGroups, efforts: st.efforts, tools: st.tools, proposals: st.proposals, devices: st.devices, vapidKey: st.vapidKey });
   // live updates (SSE) win over the snapshot, which can lag a run by a moment
   S.running = new Set([...st.agents.filter((a) => a.running).map((a) => a.name), ...S.live]);
   renderList();
@@ -527,8 +534,7 @@ function renderHead() {
     head.append(...[back, avatar(a.name, "", running),
       h("button", { class: "who", onclick: () => openDrawer(a.name), "aria-label": `${labelOf(a.name)} details` },
         h("div", { class: "title" }, labelOf(a.name)),
-        h("div", { class: "sub" }, running ? `Working: ${S.progress[a.name] || "thinking"}` : `${a.enabled ? cronText(a.schedule) : "Disabled"}, ${modelLabel(a.model)}, ${EFFORT_LABEL[a.effort].toLowerCase()} effort`)),
-      a.schedule ? h("button", { class: "btn", disabled: running || !a.enabled, onclick: runNow }, "Run task now") : null].filter(Boolean));
+        h("div", { class: "sub" }, running ? `Working: ${S.progress[a.name] || "thinking"}` : `${a.enabled ? cronText(a.schedule) : "Disabled"}, ${modelLabel(a.model)}, ${EFFORT_LABEL[a.effort].toLowerCase()} effort`))].filter(Boolean));
   } else if (v.kind === "group") {
     const g = curGroup(); if (!g) return;
     const busy = g.members.filter((m) => S.running.has(m));
@@ -655,6 +661,7 @@ function helpText() {
     out.push("", `# Talk to ${v.name}`, "Just type. You can also attach or paste photos.");
   }
   out.push("", "To create an agent, use the button next to “Agents”. Type `/` in the search box for commands that work anywhere.",
+    "", "To get a notification on this phone or computer when an agent finishes, tap the bell next to “Agents” (or type `/devices` in the search box).",
     "", "Type `@` to mention an agent. When an agent suggests a new agent or a change, Approve and Reject buttons appear under its reply.",
     "", "Agents reply in the language you write in.");
   return out.join("\n");
@@ -957,6 +964,205 @@ function openGroupDrawer(g = null) {
 }
 $("#new-agent").addEventListener("click", () => openCreateDrawer());
 
+// ---------------- push devices: native notifications (Web Push) when a run ends ----------------
+// This browser subscribes with the server's key; the server then sends it "Confirm this device", and tapping
+// that (or typing its code) confirms it. Only confirmed devices get notifications (notify.mjs).
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const isInstalled = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+// Why this browser can't turn notifications on, or null when it can.
+function pushBlocker() {
+  if (!window.isSecureContext) return "Browsers only allow notifications on a secure address: open the chat over https:// (see the README), or at http://localhost on the computer running it.";
+  if (isIOS() && !isInstalled()) return "On iPhone and iPad, notifications work in the installed app: tap Share → Add to Home Screen, open Agents from the Home Screen, and turn them on there.";
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return "This browser doesn't support push notifications.";
+  if (Notification.permission === "denied") return "Notifications are blocked for this site. Allow them in the browser's site settings, then come back.";
+  return null;
+}
+function platformName() {
+  const ua = navigator.userAgent;
+  const os = /iPhone/.test(ua) ? "iPhone" : isIOS() ? "iPad" : /Android/.test(ua) ? "Android" : /Mac/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "";
+  const app = /Edg\//.test(ua) ? "Edge" : /Firefox|FxiOS/.test(ua) ? "Firefox" : /Chrome|CriOS/.test(ua) ? "Chrome" : /Safari/.test(ua) ? "Safari" : "Browser";
+  return isIOS() && isInstalled() ? `${os} app` : `${app}${os ? ` on ${os}` : ""}`;
+}
+function suggestedDeviceName() {
+  const base = (/iPhone|iPad|Android/.exec(platformName())?.[0] ?? platformName().split(" ").pop() ?? "device").toLowerCase().replace(/[^a-z0-9]+/g, "-") || "device";
+  for (let i = 1; ; i++) { const n = i === 1 ? base : `${base}-${i}`; if (!(S.devices ?? []).some((d) => d.name === n)) return n; }
+}
+const b64uBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+const bytesB64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const sha16 = async (text) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))]
+  .map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 16);
+
+let swReg = null;
+async function initPush() {
+  if (!window.isSecureContext || !("serviceWorker" in navigator)) return;
+  try { swReg = await navigator.serviceWorker.register("/sw.js"); } catch { return; }
+  // A tapped notification opens its chat here (the service worker focuses this window and says where to go).
+  navigator.serviceWorker.addEventListener("message", (e) => { if (e.data?.type === "open") location.hash = new URL(e.data.url, location.href).hash; });
+  await findMyDevice();
+}
+// Which device (if any) is this browser: the server shows a short hash of each subscription.
+async function findMyDevice() {
+  const sub = await swReg?.pushManager?.getSubscription().catch(() => null);
+  S.myEndpointId = sub ? await sha16(sub.endpoint) : null;
+}
+const myDevice = () => (S.devices ?? []).find((d) => d.endpointId && d.endpointId === S.myEndpointId);
+
+// Turn notifications on in this browser, as a new device (name) or the one a CLI pairing code was made for (pair).
+// Must be called straight from the tap or Enter: browsers only ask for permission during a user action.
+async function enablePush({ name, pair }) {
+  const blocker = pushBlocker();
+  if (blocker) { toast(blocker); return; }
+  const asked = Notification.requestPermission();
+  try {
+    if (await asked !== "granted") { toast("Notifications weren't allowed. Allow them for this site to get them here."); return; }
+    const reg = swReg ?? (swReg = await navigator.serviceWorker.register("/sw.js"));
+    await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && sub.options.applicationServerKey && bytesB64u(sub.options.applicationServerKey) !== S.vapidKey) { await sub.unsubscribe(); sub = null; } // made for another server
+    sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uBytes(S.vapidKey) });
+    const r = await api("POST", "/api/devices", { name, pair, subscription: sub.toJSON(), platform: platformName() });
+    await findMyDevice(); await loadState();
+    toast(r.error ? `${r.device.name} added, but the confirmation couldn't be sent: ${r.error}` : "Tap the “Confirm this device” notification to finish");
+    return r.device;
+  } catch (e) { toast(e.message); }
+}
+
+const deviceState = (d) => d.verified ? "Confirmed: gets a notification whenever an agent finishes"
+  : d.connected ? (d.codePending ? "Waiting for you to tap “Confirm this device” on it" : "Not confirmed yet: send it a new confirmation")
+  : d.pairPending ? `Waiting for pairing: type /devices pair <code> in the chat on it (code valid until ${new Date(d.pairExpires).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`
+  : d.pairExpires ? "The pairing code expired: remove it and add it again"
+  : "Notifications are off on that device: turn them on there again";
+async function deviceAct(name, action, body, done) {
+  try { const r = await api("POST", `/api/devices/${name}/${action}`, body); toast(done); await loadState(); return r; }
+  catch (e) { toast(e.message); }
+}
+const sendConfirmation = (name) => deviceAct(name, "code", null, `Sent “Confirm this device” to ${name}: tap it there`);
+const confirmDevice = (name, code) => deviceAct(name, "verify", { code }, `${name} confirmed: it gets a notification whenever an agent finishes`);
+const testDevicePush = (name) => deviceAct(name, "test", null, `Test notification sent to ${name}`);
+async function removeDevice(name) {
+  if (!confirm(`Stop sending notifications to ${name}?`)) return;
+  try {
+    const mine = myDevice()?.name === name;
+    await api("DELETE", `/api/devices/${name}`);
+    if (mine) { await (await swReg?.pushManager.getSubscription())?.unsubscribe(); S.myEndpointId = null; }
+    toast(`${name} removed`); await loadState(); return true;
+  } catch (e) { toast(e.message); }
+}
+
+function deviceCard(d, rerender) {
+  const mine = d.endpointId && d.endpointId === S.myEndpointId;
+  const code = h("input", { class: "field", inputmode: "numeric", maxlength: "6", placeholder: "or its code", autocomplete: "one-time-code", style: "width:120px",
+    "aria-label": `Code for ${d.name}`, onkeydown: (e) => { if (e.key === "Enter") confirmBtn.click(); } });
+  const confirmBtn = h("button", { class: "btn primary", onclick: async () => { if (await confirmDevice(d.name, code.value)) rerender(); } }, "Confirm");
+  return h("div", { class: "card", style: `border-left-color:var(${d.verified ? "--cobalt" : "--amber"})` },
+    h("h3", {}, d.name, mine ? h("span", { class: "chip", style: "margin-left:8px;vertical-align:middle;font-weight:500" }, "This device") : null),
+    h("div", { class: "by" }, deviceState(d)),
+    h("dl", { class: "facts" },
+      d.platform ? [h("dt", {}, "Device"), h("dd", {}, d.platform)] : null,
+      h("dt", {}, "Last sent"), h("dd", {}, d.lastSentAt ? `${whenOf(d.lastSentAt)}${d.lastError ? `: failed, ${d.lastError}` : ""}` : "Never")),
+    h("div", { class: "actions", style: "flex-wrap:wrap;align-items:center" },
+      h("button", { class: "btn danger", style: "margin-right:auto", onclick: async () => { if (await removeDevice(d.name)) rerender(); } }, "Remove"),
+      d.verified ? h("button", { class: "btn", onclick: () => testDevicePush(d.name).then(rerender) }, "Send test")
+        : d.connected ? [h("button", { class: "btn", onclick: async () => { if (await sendConfirmation(d.name)) rerender(); } }, "Send again"), d.codePending ? [code, confirmBtn] : null]
+        : null));
+}
+
+// "This device": turn notifications on here (new device, or with a pairing code from the CLI).
+function thisDeviceCard(pair, rerender) {
+  if (myDevice()) return null; // its own card says "This device"
+  const blocker = pushBlocker();
+  if (blocker) return h("div", { class: "card" }, h("h3", {}, "This device"), h("p", { style: "margin:0" }, blocker));
+  const name = h("input", { class: "field", id: "device-name", maxlength: "32", autocomplete: "off", spellcheck: "false", value: suggestedDeviceName(),
+    oninput: (e) => { const v = e.target.value.toLowerCase().replace(/[\s_]+/g, "-"); if (v !== e.target.value) e.target.value = v; } });
+  const code = h("input", { class: "field", id: "device-pair", maxlength: "9", autocomplete: "off", autocapitalize: "characters", placeholder: "e.g. K7QM-4R2X", value: pair ?? "" });
+  const run = async (btn, opts) => { btn.disabled = true; if (await enablePush(opts)) rerender(); else btn.disabled = false; };
+  return h("div", { class: "card", style: "border-left-color:var(--cobalt)" },
+    h("h3", {}, "This device"), h("div", { class: "by" }, `${platformName()}: get a notification here whenever an agent finishes.`),
+    h("h4", {}, h("label", { for: "device-name" }, "Name")), name,
+    h("div", { class: "actions", style: "margin-top:12px" }, h("button", { class: "btn primary", onclick: (e) => run(e.target, { name: name.value }) }, "Turn on notifications here")),
+    h("details", { open: !!pair, style: "margin-top:10px" },
+      h("summary", { style: "cursor:pointer;color:var(--muted);font-size:14px" }, "Have a pairing code from the CLI?"),
+      h("div", { style: "display:flex;gap:8px;margin-top:8px" }, code, h("button", { class: "btn", onclick: (e) => run(e.target, { pair: code.value }) }, "Pair"))));
+}
+
+const devicesOpen = () => !!$('#drawer-root .drawer[aria-label="Push notifications"]');
+function openDevicesDrawer({ pair = null } = {}) {
+  const rerender = () => openDevicesDrawer();
+  const list = S.devices ?? [];
+  showDrawer({ label: "Push notifications", title: h("div", { class: "drawer-title" }, "Push notifications"), body: [
+    h("p", { style: "margin:0;color:var(--muted)" }, "Confirmed devices get a notification with the result whenever an agent finishes, however it was started. They're the browser's own notifications: no app or account needed."),
+    thisDeviceCard(pair, rerender),
+    ...list.map((d) => deviceCard(d, rerender)),
+    h("p", { class: "field-hint", style: "margin:0" }, "To add another phone or computer, open the chat on it and tap the bell there. From the server: ",
+      h("code", {}, "agents devices add <name>"), " gives a pairing code."),
+  ] });
+}
+$("#devices-btn").addEventListener("click", () => openDevicesDrawer());
+
+// /devices <add|pair|verify|test|remove> ... in the command modal: the same steps as the drawer.
+const DEVICE_SUBS = [
+  { name: "add", arg: "[name]", desc: "Turn on notifications on this device" },
+  { name: "pair", arg: "<code>", desc: "Connect this device with a code from `agents devices add`" },
+  { name: "verify", arg: "<device> [code]", desc: "Send a device a new confirmation, or type its code" },
+  { name: "test", arg: "<device>", desc: "Send a test notification" },
+  { name: "remove", arg: "<device>", desc: "Stop sending notifications to a device" },
+];
+function deviceArgs(text) {
+  const [, sub = "", gap, arg = "", gap2, code = ""] = text.replace(/^\s+/, "").match(/^(\S*)(\s+(\S*))?(\s+(\S*))?/);
+  const devices = S.devices ?? [];
+  const pick = (d) => ({ icon: d.verified ? "✓" : "…", label: d.name, desc: deviceState(d) });
+  if (!gap) {
+    return { title: "Devices", empty: `No /devices command starts with “${sub}”`, items: [
+      ...(!sub ? devices.map((d) => ({ ...pick(d), run: () => openDevicesDrawer() })) : []),
+      ...DEVICE_SUBS.filter((c) => c.name.startsWith(sub.toLowerCase())).map((c) => ({
+        icon: "/", label: `/devices ${c.name}`, hint: c.arg, desc: c.desc, insert: `/devices ${c.name} `, complete: `/devices ${c.name} ` })),
+    ] };
+  }
+  const n = arg.toLowerCase();
+  if (sub === "add" || sub === "pair") {
+    const blocker = pushBlocker(), mine = myDevice();
+    if (blocker) return { empty: blocker, items: [] };
+    if (mine) return { empty: `This browser already gets notifications as ${mine.name}`, items: [] };
+    if (sub === "pair") {
+      if (!/^[A-Z0-9]{4}-?[A-Z0-9]{4}$/i.test(arg)) return { empty: "Type the pairing code from `agents devices add`, e.g. K7QM-4R2X", items: [] };
+      return { title: "Press Enter", items: [{ icon: "→", label: `Pair this device with ${arg.toUpperCase()}`, desc: platformName(), run: () => enablePush({ pair: arg }).then((d) => d && openDevicesDrawer()) }] };
+    }
+    const name = n || suggestedDeviceName();
+    if (devices.some((d) => d.name === name)) return { empty: `There is already a device called ${name}`, items: [] };
+    return { title: "Press Enter", items: [{ icon: "+", label: `Turn on notifications here as ${name}`, desc: platformName(), run: () => enablePush({ name }).then((d) => d && openDevicesDrawer()) }] };
+  }
+  const sc = DEVICE_SUBS.find((c) => c.name === sub);
+  if (!sc) return { empty: `Unknown “/devices ${sub}”. Use add, pair, verify, test or remove.`, items: [] };
+  const keep = { verify: (d) => d.connected && !d.verified, test: (d) => d.verified, remove: () => true }[sub];
+  if (!gap2) {
+    const picks = devices.filter(keep).filter((d) => d.name.startsWith(n));
+    return { title: "Which device?", empty: !devices.length ? "No devices yet: /devices add" : sub === "verify" ? "No device is waiting for confirmation"
+      : sub === "test" ? "No device is confirmed yet" : `No device matches “${n}”`,
+      items: picks.map((d) => ({ ...pick(d), complete: `/devices ${sub} ${d.name} `,
+        ...(sub === "verify" ? { insert: `/devices verify ${d.name} ` } : { run: () => (sub === "test" ? testDevicePush(d.name) : removeDevice(d.name)) }) })) };
+  }
+  const d = devices.find((x) => x.name === n);
+  if (!d) return { empty: `No device called ${n}`, items: [] };
+  if (sub !== "verify") return { title: "Press Enter", items: [{ icon: "/", label: `/devices ${sub} ${n}`, desc: sc.desc, run: () => (sub === "test" ? testDevicePush(n) : removeDevice(n)) }] };
+  if (d.verified) return { empty: `${n} is already confirmed. Try /devices test ${n}`, items: [] };
+  if (!d.connected) return { empty: deviceState(d), items: [] };
+  const items = [];
+  if (/^\d{6}$/.test(code)) items.push({ icon: "✓", label: `Confirm ${n} with ${code}`, desc: "Only confirmed devices get notifications", run: () => confirmDevice(n, code) });
+  items.push({ icon: "→", label: `Send ${n} a new confirmation`, desc: d.codePending ? "Or type the 6-digit code it shows" : "Then tap it on the device", run: () => sendConfirmation(n) });
+  return { title: "Press Enter", items };
+}
+
+// Links: #agent=<name> (a tapped notification), #devices, #pair=<code>
+function openFromHash() {
+  const [k, v = ""] = location.hash.slice(1).split("=");
+  if (!k) return;
+  history.replaceState(null, "", location.pathname + location.search); // so the same link works again
+  if (k === "agent" && S.agents.some((a) => a.name === v)) open({ kind: "agent", name: v });
+  if (k === "devices") openDevicesDrawer();
+  if (k === "pair") openDevicesDrawer({ pair: decodeURIComponent(v) });
+}
+window.addEventListener("hashchange", () => { if (!$("#app").hidden) openFromHash(); });
+
 // ---------------- command modal: opens when the search box starts with "/" ----------------
 // Commands here work from anywhere, not inside one chat. Items either fill in the box (insert),
 // or do something (run); Tab completes an item's text without running it.
@@ -998,6 +1204,7 @@ const PALETTE = [
     args: agentArg("disable", (a) => a.enabled, "Every agent is already off", (n) => setAgentOn(n, false)) },
   { name: "group", desc: "Create a group chat", run: () => openGroupDrawer() },
   { name: "approvals", desc: "Open the suggestions waiting for you", run: () => open({ kind: "approvals" }) },
+  { name: "devices", arg: "[add|pair|verify|test|remove]", desc: "Phones and computers notified when an agent finishes", run: () => openDevicesDrawer(), args: deviceArgs },
   { name: "help", desc: "Show all commands", run: () => openCmd("/") },
 ];
 
@@ -1130,6 +1337,10 @@ function connect() {
     if (S.view?.kind === "approvals" && /propose|approve|reject/.test(e.action)) renderApprovals();
     // In the proposer's own chat the Approve/Reject buttons appear under its reply, so no toast there.
     const here = S.view?.kind === "agent" ? S.view.name === e.actor : !!curGroup()?.members.includes(e.actor);
+    if (/^device-/.test(e.action)) {
+      if (e.action === "device-verify") toast(`${e.details?.device} confirmed: it gets a notification whenever an agent finishes`);
+      loadState().then(() => { if (devicesOpen()) openDevicesDrawer(); }).catch(() => {});
+    }
     if (/propose-/.test(e.action) && !here) toast(`${e.actor} suggested ${e.action === "propose-create" ? "a new agent" : "a change"}. Open Approvals to review.`);
     refreshSoon();
   });
@@ -1179,7 +1390,8 @@ function showLogin() { $("#app").hidden = true; $("#login").hidden = false; es?.
 async function boot() {
   $("#login").hidden = true; $("#app").hidden = false;
   await loadState(); connect();
-  openDefault();
+  await initPush().catch(() => {});
+  openDefault(); openFromHash();
 }
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault(); $("#login-err").textContent = "";

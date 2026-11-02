@@ -1,0 +1,16 @@
+# Docker Desktop (Mac/Windows): keeps the agents' data (database, workspaces, logs) in a Docker volume
+# instead of DATA_DIR/agents. Docker Desktop's shared folders don't support file locks between processes,
+# so SQLite can't keep the database consistent between the app and `docker exec ... agents` commands
+# (the CLI's changes or the app's would get lost). config/ stays in DATA_DIR/config.
+#   COMPOSE_FILE=compose.yaml:compose.mac.yaml   (add compose.build.yaml / compose.dev.yaml as needed)
+# Browse the files in Docker Desktop → Volumes (<project>_agents-data).
+services:
+  init:
+    volumes:
+      - agents-data:/target/agents   # init creates the folders and sets their owner, as on Linux
+  claude-agents:
+    volumes:
+      - agents-data:/data
+
+volumes:
+  agents-data:

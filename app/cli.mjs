@@ -4,6 +4,7 @@
 import path from "node:path";
 import { openStore, validateAgent, diff, MODELS, EFFORTS } from "./store.mjs";
 import { createEngine, loadConfig } from "./engine.mjs";
+import { createPairing, sendCode, checkCode, testDevice, deviceStatus } from "./notify.mjs";
 
 const DATA_DIR = process.env.DATA_DIR || "/data";
 const CONFIG_DIR = process.env.CONFIG_DIR || "/app/config";
@@ -28,6 +29,15 @@ const HELP = `agents: manage your agents
   agents export                    print all agents as JSON
   agents runs [name]               recent runs
   agents events                    audit log
+
+Push notifications (the browser's own, on phones and computers) when an agent run ends:
+  agents devices                   devices that get them
+  agents devices add <name>        a pairing code: on the device, open the chat and type /devices pair <code>
+                                   (or there tap the bell next to "Agents" → Turn on notifications here)
+  agents devices verify <name>     send the device a new "Confirm this device" notification...
+  agents devices verify <name> <code>   ...tap it, or type its code: only confirmed devices get notifications
+  agents devices test <name>       send a test notification
+  agents devices remove <name>     stop notifying a device
 
 Changes are picked up by the scheduler within ~10 seconds.
 Use your ChatGPT plan for OpenAI models: codex login --device-auth`;
@@ -121,6 +131,58 @@ try {
       const open = store.proposals("open");
       if (open.length) console.log(`\n${open.length} open proposal(s). Review: agents proposals`);
       process.exitCode = r.ok ? 0 : 1;
+      await engine.idle();
+      break;
+    }
+    case "devices": {
+      const [sub = "list", name, code] = args;
+      const get = () => store.device(need(name, "device name")) ?? fail(`no device "${name}". See: agents devices`);
+      switch (sub) {
+        case "list": case "ls": {
+          const list = store.devices();
+          if (!list.length) { console.log("No devices yet. In the chat on the device, tap the bell next to \"Agents\", or: agents devices add <name>"); break; }
+          console.log(`${pad("NAME", 16)} ${pad("STATUS", 26)} ${pad("PLATFORM", 22)} LAST NOTIFICATION`);
+          for (const d of list) {
+            const last = d.lastSentAt ? `${d.lastSentAt.slice(0, 16).replace("T", " ")} ${d.lastError ? `✗ ${d.lastError}` : "✓"}` : "-";
+            console.log(`${pad(d.name, 16)} ${pad(deviceStatus(d), 26)} ${pad(d.platform || "-", 22)} ${last}`);
+          }
+          if (list.some((d) => !d.verifiedAt)) console.log("\nOnly confirmed devices get notifications.");
+          break;
+        }
+        case "add": case "create": {
+          const pair = createPairing(store, need(name, "device name"), HUMAN);
+          console.log(`✓ added ${name}. Pairing code (valid 15 minutes):  ${pair}
+
+  On the device, open the chat (sign in), then type in the search box:  /devices pair ${pair}
+  iPhone/iPad: first tap Share → Add to Home Screen and open the chat from there.
+  The chat must be on https:// (or localhost) for the browser to allow notifications.
+  The device then gets a "Confirm this device" notification: tap it.`);
+          break;
+        }
+        case "verify": {
+          const d = get();
+          if (d.verifiedAt) { console.log(`= ${d.name} is already confirmed. Send a test: agents devices test ${d.name}`); break; }
+          if (!d.endpoint) fail(`${d.name} isn't connected yet: turn notifications on in the chat on that device`);
+          if (code) {
+            checkCode(store, d.name, code, HUMAN);
+            console.log(`✓ ${d.name} confirmed: it gets a notification whenever an agent run ends`);
+          } else {
+            await sendCode(store, d.name);
+            console.log(`✓ sent "Confirm this device" to ${d.name} (valid 15 minutes). Tap it there, or: agents devices verify ${d.name} <code>`);
+          }
+          break;
+        }
+        case "test":
+          await testDevice(store, get().name);
+          console.log(`✓ sent a test notification to ${name}`);
+          break;
+        case "remove": case "rm": case "delete":
+          store.removeDevice(need(name, "device name"), HUMAN);
+          console.log(`✓ removed ${name}: it gets no more notifications`);
+          break;
+        default:
+          fail(`unknown "devices ${sub}". See: agents help`);
+      }
       break;
     }
     case "import": {

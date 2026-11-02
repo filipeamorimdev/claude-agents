@@ -9,6 +9,7 @@
 //   messages       chat history shown in the UI
 //   chat_sessions  Claude session id per agent chat, so conversations continue
 //   groups         group chats: every member agent gets each message
+//   devices        browsers/phones that get a push notification when a run ends (Web Push, notify.mjs)
 //
 // Agents can only ever create PROPOSALS. Only a human (CLI or UI) applies them.
 // Exception: an agent may edit its own profile (name shown in the UI, description, and its instructions
@@ -205,6 +206,23 @@ export function openStore(file) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS devices (
+      name TEXT PRIMARY KEY,
+      endpoint TEXT UNIQUE,
+      p256dh TEXT,
+      auth TEXT,
+      platform TEXT NOT NULL DEFAULT '',
+      pair_hash TEXT,
+      pair_expires TEXT,
+      verified_at TEXT,
+      code_hash TEXT,
+      code_expires TEXT,
+      code_attempts INTEGER NOT NULL DEFAULT 0,
+      last_sent_at TEXT,
+      last_error TEXT,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
   `);
   // migration: a display name the agent can change (the name column stays its id)
@@ -225,6 +243,12 @@ export function openStore(file) {
     createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
   };
   const row2group = (r) => r && { id: r.id, name: r.name, members: JSON.parse(r.members), createdBy: r.created_by, createdAt: r.created_at };
+  const row2device = (r) => r && {
+    name: r.name, endpoint: r.endpoint, p256dh: r.p256dh, auth: r.auth, platform: r.platform,
+    pairHash: r.pair_hash, pairExpires: r.pair_expires, verifiedAt: r.verified_at,
+    codeHash: r.code_hash, codeExpires: r.code_expires, codeAttempts: r.code_attempts,
+    lastSentAt: r.last_sent_at, lastError: r.last_error, createdBy: r.created_by, createdAt: r.created_at,
+  };
   const parseMsg = (m) => ({ ...m, attachments: m.attachments ? JSON.parse(m.attachments) : [], meta: m.meta ? JSON.parse(m.meta) : {} });
   const bump = () => db.prepare(
     "INSERT INTO meta(key,value) VALUES('version','1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1"
@@ -418,6 +442,43 @@ export function openStore(file) {
       db.prepare("DELETE FROM messages WHERE chat=?").run(`group:${id}`);
       store.event(actor, "group-delete", null, { group: id, name: g.name });
     },
+
+    // ----- devices: get a push notification when a run ends (rules and sending in notify.mjs) -----
+    devices: () => db.prepare("SELECT * FROM devices ORDER BY name").all().map(row2device),
+    device: (name) => row2device(db.prepare("SELECT * FROM devices WHERE name=?").get(name)),
+    /** A device waiting for its browser: either connected right away (UI) or later with a pairing code (CLI). */
+    addDevice({ name, pairHash = null, pairExpires = null }, actor) {
+      if (store.device(name)) throw new Error(`there is already a device called "${name}"`);
+      db.prepare("INSERT INTO devices(name,pair_hash,pair_expires,created_by,created_at) VALUES (?,?,?,?,?)")
+        .run(name, pairHash, pairExpires, actor, now());
+      store.event(actor, "device-add", null, { device: name, pairing: !!pairHash });
+    },
+    /** A browser's push subscription for a device. It needs confirming again. Never logged: it's a secret. */
+    connectDevice(name, { endpoint, p256dh, auth, platform }, actor) {
+      db.prepare(`UPDATE devices SET endpoint=?, p256dh=?, auth=?, platform=?, pair_hash=NULL, pair_expires=NULL,
+        verified_at=NULL, code_hash=NULL, code_expires=NULL, code_attempts=0, last_error=NULL WHERE name=?`).run(endpoint, p256dh, auth, platform, name);
+      store.event(actor, "device-connect", null, { device: name, platform });
+    },
+    /** The browser renewed its subscription (same device, still confirmed). */
+    renewDevice: (oldEndpoint, { endpoint, p256dh, auth }) =>
+      db.prepare("UPDATE devices SET endpoint=?, p256dh=?, auth=?, last_error=NULL WHERE endpoint=?").run(endpoint, p256dh, auth, oldEndpoint).changes > 0,
+    /** The push service says the subscription is gone (notifications turned off, browser data cleared). */
+    disconnectDevice(name) {
+      db.prepare("UPDATE devices SET endpoint=NULL, p256dh=NULL, auth=NULL, verified_at=NULL, code_hash=NULL WHERE name=?").run(name);
+      store.event("system", "device-disconnect", null, { device: name });
+    },
+    removeDevice(name, actor) {
+      if (!db.prepare("DELETE FROM devices WHERE name=?").run(name).changes) throw new Error(`no device "${name}"`);
+      store.event(actor, "device-remove", null, { device: name });
+    },
+    setDeviceCode: (name, codeHash, expires) =>
+      db.prepare("UPDATE devices SET code_hash=?, code_expires=?, code_attempts=0 WHERE name=?").run(codeHash, expires, name),
+    failDeviceCode: (name) => db.prepare("UPDATE devices SET code_attempts=code_attempts+1 WHERE name=?").run(name),
+    verifyDevice(name, actor) {
+      db.prepare("UPDATE devices SET verified_at=?, code_hash=NULL, code_expires=NULL, code_attempts=0 WHERE name=?").run(now(), name);
+      store.event(actor, "device-verify", null, { device: name });
+    },
+    deviceSent: (name, error) => db.prepare("UPDATE devices SET last_sent_at=?, last_error=? WHERE name=?").run(now(), error, name),
 
     close: () => db.close(),
   };

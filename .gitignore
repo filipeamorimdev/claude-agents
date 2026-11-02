@@ -1,5 +1,7 @@
 # Private, created by install.sh
 .env
+.env.*
+!.env.example
 config/agents.mjs
 config/mcp-servers.mjs
 secrets/*.env

@@ -30,6 +30,16 @@ export function describeEvent(e) {
       return `${e.actor} updated group "${d.name}"${d.added?.length ? `, added ${d.added.join(", ")}` : ""}${d.removed?.length ? `, removed ${d.removed.join(", ")}` : ""}`;
     case "group-delete":
       return `${e.actor} deleted group "${d.name}"`;
+    case "device-add":
+      return `${e.actor} added push device "${d.device}"${d.pairing ? ", waiting for pairing" : ""}`;
+    case "device-connect":
+      return `${e.actor} turned on notifications for "${d.device}"${d.platform ? ` (${d.platform})` : ""}, waiting for confirmation`;
+    case "device-verify":
+      return `${e.actor} confirmed push device "${d.device}"`;
+    case "device-disconnect":
+      return `push device "${d.device}" turned notifications off; turn them on again on that device`;
+    case "device-remove":
+      return `${e.actor} removed push device "${d.device}"`;
     case "enable": case "disable": case "delete":
       return `${e.actor} ${e.action}d "${e.agent}"`;
     default:

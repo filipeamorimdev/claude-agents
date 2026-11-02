@@ -21,5 +21,10 @@ for f in agents mcp-servers; do
 done
 chown root:"$G" "$T/config"; chmod 755 "$T/config"
 chmod 644 "$T/config"/*.mjs
+# Optional https certificate for the chat (config/tls/cert.pem + key.pem): the key readable by the app's group only.
+if [ -d "$T/config/tls" ]; then
+  chown -R root:"$G" "$T/config/tls"; chmod 750 "$T/config/tls"
+  find "$T/config/tls" -type f -exec chmod 640 {} +
+fi
 
 echo "data folder ready: agents → $U:$G"

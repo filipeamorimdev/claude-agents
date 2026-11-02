@@ -10,12 +10,15 @@
 //   - the Claude process gets a minimal environment, not the container's full env
 //   - MCP servers come only from the human-controlled registry (config/mcp-servers.mjs),
 //     plus "self" (every agent: edit its own name, description and instructions; see agents-tool.mjs)
+//
+// Every run that ends sends a push notification to the verified devices (notify.mjs).
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { mkdir, appendFile } from "node:fs/promises";
 import path from "node:path";
 import { createAgentsServer, createSelfServer } from "./agents-tool.mjs";
 import { runCodex } from "./codex.mjs";
+import { notifyRun } from "./notify.mjs";
 import { turnsFor, providerOf } from "./store.mjs";
 
 const READ_TOOLS = new Set(["Read", "Glob", "Grep"]);
@@ -41,6 +44,7 @@ function usageLine(tokens, limit, tz) {
 }
 
 export function createEngine({ store, registry, dataDir, tz, log = console.log }) {
+  const pending = new Set(); // notifications being sent
   const forbidden = [
     "//proc/**", "//sys/**", "//etc/**", "//run/**", "//app/**",
     `/${dataDir}/home/**`, `/${dataDir}/logs/**`, `/${dataDir}/agents.db*`,
@@ -239,11 +243,19 @@ export function createEngine({ store, registry, dataDir, tz, log = console.log }
       log(name, `ERROR: ${err?.message || err}`);
     } finally {
       store.endRun(runId, record);
+      // Not awaited: the reply shouldn't wait for the push. The CLI waits with idle() before it exits.
+      const sent = notifyRun(store, { agent: name, trigger, ...outcome, seconds: Math.round((Date.now() - started) / 1000) }, log)
+        .catch((e) => log("notify", `ERROR: ${e.message}`))
+        .finally(() => pending.delete(sent));
+      pending.add(sent);
     }
     return outcome;
   }
 
-  return { runAgent, toolPolicy, isRunning, registry };
+  /** Resolves once the notifications already started are sent. */
+  const idle = () => Promise.all([...pending]);
+
+  return { runAgent, toolPolicy, isRunning, idle, registry };
 }
 
 /** Load a JS config module that exports `name`, falling back to the example files. */

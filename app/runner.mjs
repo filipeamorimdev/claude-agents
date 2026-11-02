@@ -2,10 +2,11 @@
 //  - keeps cron jobs in sync with the agents table (changes apply within ~10 s, no restart)
 //  - mirrors every audit event (new agents, proposals, approvals, agent-to-agent messages)
 //    to stdout, so they show in `docker logs claude-agents`, whoever made them (UI, CLI, agents)
-//  - serves the chat UI when UI_PASSWORD is set
+//  - serves the chat UI when UI_PASSWORD is set (over https with config/tls/cert.pem + key.pem)
 
 import cron from "node-cron";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import { openStore, validateAgent } from "./store.mjs";
 import { createEngine, loadConfig } from "./engine.mjs";
@@ -36,6 +37,7 @@ const runIdx = process.argv.indexOf("--run");
 if (runIdx !== -1) {
   const r = await engine.runAgent(process.argv[runIdx + 1], { trigger: "manual" });
   console.log(r.result);
+  await engine.idle();
   process.exit(r.ok ? 0 : 1);
 }
 
@@ -114,7 +116,10 @@ reconcile();
 setInterval(() => { tailEvents(); reconcile(); }, 2_000);
 
 if (process.env.UI_PASSWORD) {
-  startUi({ store, engine, dataDir: DATA_DIR, bus, port: UI_PORT, password: process.env.UI_PASSWORD, log });
+  // A certificate the phones trust (e.g. from `tailscale cert` or mkcert): browsers only allow push notifications on https.
+  const [cert, key] = await Promise.all(["cert.pem", "key.pem"].map((f) => readFile(path.join(CONFIG_DIR, "tls", f)).catch(() => null)));
+  if (!cert !== !key) log("ui", "config/tls needs both cert.pem and key.pem: serving http");
+  startUi({ store, engine, dataDir: DATA_DIR, bus, port: UI_PORT, password: process.env.UI_PASSWORD, log, tls: cert && key ? { cert, key } : null });
 } else {
   log("ui", "UI_PASSWORD not set: chat UI disabled");
 }

@@ -32,6 +32,7 @@
 #   BROWSER_ALLOWED_ORIGINS (https://www.olx.pt)     websites it may open, separated by ";"
 #
 # Agent and MCP server config lives in DATA_DIR/config (created with defaults on first start).
+# For https (phones need it for push notifications) put cert.pem and key.pem in DATA_DIR/config/tls.
 
 x-hardening: &hardening
   cap_drop: [ALL]

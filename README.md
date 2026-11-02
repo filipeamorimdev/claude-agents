@@ -90,6 +90,12 @@ docker compose up -d
 - The firewall works inside Docker Desktop's VM: the agents can't reach your router, other
   devices, this Mac or other containers. `bash scripts/verify.sh` checks it (no `sudo` needed).
 - Agents only run while the Mac is awake and Docker Desktop is open; missed schedules are skipped.
+- Also set `COMPOSE_FILE=compose.yaml:compose.mac.yaml` in `.env`. Docker Desktop's shared folders don't
+  support file locks between processes, so with the database in `DATA_DIR` the app and `agents`
+  commands would lose each other's changes. [`compose.mac.yaml`](compose.mac.yaml) keeps the agents'
+  data in a Docker volume instead (Docker Desktop → Volumes); `DATA_DIR/config` stays a normal folder.
+- To test a checkout next to an install, use [`compose.dev.yaml`](compose.dev.yaml): its own container
+  names (`claude-agents-<name>`, from `COMPOSE_PROJECT_NAME`) and images, with its own `UI_PORT`, `AGENTS_SUBNET` and `DATA_DIR`.
 
 ## 3. Use it
 
@@ -104,6 +110,40 @@ Open `http://<server-ip>:8090` and sign in.
 - **Commands anywhere:** type `/` in the search box for commands that aren't tied to one chat, e.g.
   `/ask release-watch what's new?`, `/run`, `/enable`, `/disable`, `/new`, `/group`.
 - Type `/help` in any chat for that chat's commands, and `@` to mention an agent.
+
+## Push notifications
+
+Get a notification on your phone or computer whenever an agent run ends (scheduled, chat, group,
+CLI or asked by another agent), with its result. These are the browser's own notifications
+(Web Push): no app or account needed. Tapping one opens that agent's chat.
+
+1. Open the chat on the device over **https** (see below). On iPhone/iPad (iOS 16.4+) first tap
+   Share → **Add to Home Screen** and open Agents from the Home Screen: iOS only allows
+   notifications for installed web apps.
+2. Tap the bell next to "Agents" → **Turn on notifications here**, and allow them.
+3. The device gets a **Confirm this device** notification: tap it. Until it's confirmed it gets
+   nothing else, so you know notifications really arrive.
+
+Type `/devices` in the search box for the same as commands (`/devices add`, `/devices test phone`, …).
+From the server:
+
+```bash
+docker exec claude-agents agents devices              # list, with the last notification and any error
+docker exec claude-agents agents devices add phone    # a pairing code: on the phone type /devices pair <code>
+docker exec claude-agents agents devices verify phone # send a new confirmation (or: verify phone <code>)
+docker exec claude-agents agents devices test phone
+docker exec claude-agents agents devices remove phone
+```
+
+**https:** browsers only allow notifications on a secure address (or `http://localhost` on the same
+computer). Either put a certificate your devices trust in `DATA_DIR/config/tls/` as `cert.pem` and
+`key.pem` and redeploy (the chat then serves https on the same port; e.g. `tailscale cert` or
+[mkcert](https://github.com/FiloSottile/mkcert) with its root installed on the phone), or put the chat
+behind a reverse proxy or `tailscale serve` that does https.
+
+Notifications are end-to-end encrypted to each device, then delivered by its browser's push service
+(Apple, Google or Mozilla), which can't read them. If a device turns notifications off, it shows as
+disconnected: turn them on again there.
 
 ## Use your ChatGPT plan
 
