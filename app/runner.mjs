@@ -1,4 +1,5 @@
-// Main process: scheduler + chat UI + audit log mirror.
+// Main process: scheduler + chat UI (and its webhooks) + audit log mirror.
+// Logs are never removed here: they are kept until the human purges them (`agents logs purge`, or the Activity page).
 //  - keeps cron jobs in sync with the agents table (changes apply within ~10 s, no restart)
 //  - mirrors every audit event (new agents, proposals, approvals, agent-to-agent messages)
 //    to stdout, so they show in `docker logs claude-agents`, whoever made them (UI, CLI, agents)
@@ -19,6 +20,9 @@ const CONFIG_DIR = process.env.CONFIG_DIR || "/app/config";
 const TZ = process.env.TZ || "UTC";
 const UI_PORT = Number(process.env.UI_PORT || 8090);
 const log = (name, msg) => console.log(`${new Date().toISOString()} [${name}] ${msg}`);
+
+// A stray error in a background path (a notification, a follow-up run) is logged, not fatal: runs in flight keep going.
+process.on("unhandledRejection", (e) => log("runner", `ERROR (unhandled): ${e?.stack || e}`));
 
 // Keeps running without credentials, so you can still sign in with ChatGPT inside the container.
 await prepareCodexHome();
@@ -41,13 +45,38 @@ if (runIdx !== -1) {
   process.exit(r.ok ? 0 : 1);
 }
 
+// What the engine does by itself (delegated tasks, an agent asking for an OK mid-run) shows live in the chat.
+engine.hooks.post = (chat, role, author, text, opts) => {
+  const m = store.addMessage(chat, role, author, text, opts);
+  bus.emit("message", m);
+  return m;
+};
+engine.hooks.running = (agent, running) => bus.emit("running", { agent, running });
+engine.hooks.progress = (p) => bus.emit("progress", p);
+// Runs, tasks and questions to the human from before a restart can't finish now: close them.
+// An open run would keep its agent "busy" (no chat, no schedule) until it looked two hours old.
+for (const r of store.closeStaleRuns()) {
+  log(r.agent, `run #${r.id} (${r.trigger}) was cut short by a restart`);
+  const group = /^group:\d+$/.test(r.trigger) && store.group(Number(r.trigger.slice(6)));
+  store.addMessage(group ? r.trigger : r.agent, "system", "system",
+    `The server restarted while ${r.agent} was working, so that run stopped. Ask again if you still need it.`);
+}
+store.failStaleTasks();
+
 // ---------- audit log -> docker logs (+ UI) ----------
 let lastEvent = store.lastEventId();
+let lastLog = store.lastLogId();
 function tailEvents() {
   for (const e of store.eventsSince(lastEvent)) {
     lastEvent = e.id;
     console.log(`${e.at} [event] ${describeEvent(e)}`);
     bus.emit("event", e);
+  }
+  // What agents are doing right now, for the Activity page (whoever wrote it: this process or the CLI).
+  for (;;) {
+    const rows = store.logSince(lastLog);
+    for (const r of rows) { lastLog = r.id; bus.emit("log", r); }
+    if (rows.length < 500) break;
   }
 }
 
@@ -88,7 +117,8 @@ async function scheduledRun(name) {
     const r = await engine.runAgent(name, { trigger: "schedule" });
     if (r.result && !r.busy) {
       bus.emit("message", store.addMessage(name, "agent", name, r.result, {
-        meta: { model: r.model, effort: r.effort, turns: r.turns, ok: r.ok, task: true, scheduled: true, proposals: store.proposalIdsSince(name, started) },
+        meta: { model: r.model, effort: r.effort, turns: r.turns, session: r.session, ok: r.ok, task: true, scheduled: true,
+          proposals: store.proposalIdsSince(name, started), logins: store.loginRequestIdsSince(name, started), tasks: store.taskIdsSince(name, started) },
       }));
     }
   } finally {
@@ -106,14 +136,16 @@ function reconcile() {
   }
   for (const [name, schedule] of wanted) {
     if (jobs.has(name)) continue;
-    jobs.set(name, { schedule, task: cron.schedule(schedule, () => scheduledRun(name), { timezone: TZ }) });
+    jobs.set(name, { schedule, task: cron.schedule(schedule, () => scheduledRun(name).catch((e) => log(name, `ERROR: ${e?.message || e}`)), { timezone: TZ }) });
     log(name, `scheduled "${schedule}" (${TZ})`);
   }
   bus.emit("refresh");
 }
 
 reconcile();
-setInterval(() => { tailEvents(); reconcile(); }, 2_000);
+setInterval(() => {
+  try { tailEvents(); reconcile(); } catch (e) { log("runner", `ERROR: ${e?.message || e}`); } // e.g. the database busy: next tick
+}, 2_000);
 
 if (process.env.UI_PASSWORD) {
   // A certificate the phones trust (e.g. from `tailscale cert` or mkcert): browsers only allow push notifications on https.

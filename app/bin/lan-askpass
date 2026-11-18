@@ -1,0 +1,4 @@
+#!/bin/sh
+# lan-askpass: ssh's SSH_ASKPASS in the LAN gateway (lan.mjs). Prints the vault password the gateway put in its own
+# ssh process's environment for `lan-ssh --login`. Anywhere else LAN_SSH_PASSWORD is unset and it prints nothing.
+printf '%s\n' "${LAN_SSH_PASSWORD:-}"

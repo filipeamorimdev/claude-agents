@@ -9,6 +9,12 @@ services:
     image: claude-agents:local
   init:
     image: claude-agents:local
+  vault:
+    image: claude-agents:local
+  shell:
+    image: claude-agents:local
+  lan:
+    image: claude-agents:local
   firewall:
     build: firewall
     image: claude-agents-firewall:local

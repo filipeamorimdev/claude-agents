@@ -3,7 +3,8 @@
 # and never retags or replaces another install's. In a .env.<name> next to this file set:
 #   COMPOSE_PROJECT_NAME=claude-agents-<name>
 #   COMPOSE_FILE=compose.yaml:compose.build.yaml:compose.dev.yaml
-#   DATA_DIR, UI_PORT, AGENTS_SUBNET of its own
+#   DATA_DIR, UI_PORT, AGENTS_SUBNET, SHELL_SUBNET + LAN_GATEWAY_IP and BROWSER_LAN_SUBNET +
+#   LAN_GATEWAY_BROWSER_IP + LAN_BROWSER_IP of its own
 # then: docker compose --env-file .env.<name> up -d --build
 #       docker exec -it claude-agents-<name> agents help
 services:
@@ -17,3 +18,12 @@ services:
     container_name: ${COMPOSE_PROJECT_NAME}-firewall
   browser-admaster:
     container_name: ${COMPOSE_PROJECT_NAME}-browser
+  vault:
+    image: ${COMPOSE_PROJECT_NAME}:local
+    container_name: ${COMPOSE_PROJECT_NAME}-vault
+  shell:
+    image: ${COMPOSE_PROJECT_NAME}:local
+    container_name: ${COMPOSE_PROJECT_NAME}-shell
+  lan:
+    image: ${COMPOSE_PROJECT_NAME}:local
+    container_name: ${COMPOSE_PROJECT_NAME}-lan

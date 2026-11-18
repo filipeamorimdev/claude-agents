@@ -129,7 +129,7 @@ info "compose: $(docker compose version --short) ✓"
 MEM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
 [ "$MEM_MB" -lt 3500 ] && warn "only ${MEM_MB} MB RAM; 4 GB+ recommended (8 GB with the browser agent)"
 [ -d /etc/openmediavault ] && info "OpenMediaVault detected"
-for cname in claude-agents browser-admaster claude-agents-firewall; do
+for cname in claude-agents browser-admaster claude-agents-firewall claude-agents-shell claude-agents-vault claude-agents-lan; do
   owner=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$cname" 2>/dev/null || true)
   if [ -n "$owner" ] && [ "$owner" != "$REPO_DIR" ]; then
     die "a '$cname' container from another setup is running ($owner). Stop it first (OMV: Services → Compose → Files → Down)."
@@ -231,7 +231,7 @@ if [ -z "$BROWSER_SECRETS" ] && [ -f secrets/admaster.env ]; then
 fi
 if [ "$BROWSER" = 1 ] && [ "$YES" = 0 ]; then
   ask ORIGINS "Websites the browser may open (separate with ;)" "$ORIGINS"
-  [ -z "$BROWSER_SECRETS" ] && info "Add the site logins later as BROWSER_SECRETS in .env (NAME=value;NAME=value)"
+  [ -z "$BROWSER_SECRETS" ] && info "Add the site logins later in the chat (key icon): they're kept in the vault"
 fi
 
 # ---------- system user ----------
@@ -282,7 +282,7 @@ HA_TOKEN=$(env_get HA_TOKEN)
 AGENTS_CPUS=$(env_get AGENTS_CPUS | grep . || echo 1.5)
 AGENTS_MEMORY=$(env_get AGENTS_MEMORY | grep . || echo 1g)
 BROWSER_CPUS=$(env_get BROWSER_CPUS | grep . || echo 2.0)
-BROWSER_MEMORY=$(env_get BROWSER_MEMORY | grep . || echo 1g)"
+BROWSER_MEMORY=$(env_get BROWSER_MEMORY | grep . || echo 2g)"
 if [ "$DRY" = 1 ]; then
   echo "${c_dim}    [dry-run] write .env:${c_off}"
   echo "$ENV_CONTENT" | sed -E 's/^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|UI_PASSWORD|BROWSER_SECRETS|HA_TOKEN)=.+/\1=<hidden>/; s/^/      /'
@@ -317,6 +317,6 @@ cat <<EOF
     Config:        $DATA_DIR/config/   (then: docker compose restart claude-agents)
     Reports:       $DATA_DIR/agents/workspaces/<agent>/reports/
 EOF
-[ "$BROWSER" = 1 ] && echo "    Logins:        edit BROWSER_SECRETS in .env, then: docker compose up -d browser-admaster"
+[ "$BROWSER" = 1 ] && echo "    Logins:        in the chat, key icon (or when an agent asks for one)"
 [ "$CHATGPT" = 1 ] && echo "    ChatGPT:       docker exec -it claude-agents codex login --device-auth   (once; then pick a GPT model in the chat)"
 exit 0

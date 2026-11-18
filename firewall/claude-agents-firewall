@@ -1,5 +1,5 @@
 #!/bin/sh
-# claude-agents-firewall: keep the agents' Docker network away from your LAN and this host.
+# claude-agents-firewall: keep one of the stack's Docker networks away from your LAN and this host.
 #
 #   claude-agents-firewall <subnet>            apply rules (default 172.30.0.0/24)
 #   claude-agents-firewall --remove <subnet>   remove rules
@@ -11,11 +11,15 @@
 #   - this host itself (NAS web UI, SMB/NFS, SSH), via any of its IPs    -> INPUT
 #
 # Exceptions: "IP:PORT" (or just "IP") entries, e.g. "192.168.1.50:8123" for Home Assistant,
-# separated by commas or spaces in $FIREWALL_ALLOW (or one per line in $ALLOW_FILE).
+# separated by commas or spaces in $FIREWALL_ALLOW (or one per line in $ALLOW_FILE). Never a subnet:
+# anything that isn't one IPv4 address with an optional port is ignored.
+#   ALLOW_SRC=<ip>     the exceptions apply only to this one container of the subnet (the LAN gateway on the
+#                      command sandbox's network): the other containers there still reach none of them
 # Normally run by the firewall container (see entrypoint.sh); $IPT picks the iptables backend.
 #
-# Each install gets its own chains, named after its subnet, so several installs on one host
-# (each with its own AGENTS_SUBNET) don't overwrite or remove each other's rules.
+# The rules of a subnet are replaced in one step (iptables-restore), so there is never a moment
+# without them while they change. Each install gets its own chains, named after its subnet, so several
+# installs on one host (each with its own AGENTS_SUBNET) don't overwrite or remove each other's rules.
 
 set -eu
 ALLOW_FILE=${ALLOW_FILE:-/etc/claude-agents/firewall-allow}
@@ -30,9 +34,10 @@ IN="CLAUDE-$TAG-IN"
 LEGACY_FWD=CLAUDE-AGENTS                # shared chains used by older versions
 LEGACY_IN=CLAUDE-AGENTS-IN
 
+# One IPv4 address, optionally with a port. Never a subnet, a range or a name.
 allow_list() {
   { [ -f "$ALLOW_FILE" ] && cat "$ALLOW_FILE"; echo "${FIREWALL_ALLOW:-}" | tr ', ' '\n\n'; } \
-    | grep -vE '^[[:space:]]*(#|$)' || true
+    | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}(:[0-9]{1,5})?$' || true
 }
 
 command -v "$IPT" >/dev/null 2>&1 || { echo "$IPT not found; cannot install the LAN firewall" >&2; exit 1; }
@@ -51,46 +56,57 @@ for chain in "$LEGACY_FWD" "$LEGACY_IN"; do
   fi
 done
 
-# Detach and clear our chains (safe to run repeatedly)
-while "$IPT" -D DOCKER-USER -s "$SUBNET" -j "$FWD" 2>/dev/null; do :; done
-while "$IPT" -D INPUT -s "$SUBNET" -j "$IN" 2>/dev/null; do :; done
-"$IPT" -F "$FWD" 2>/dev/null || true
-"$IPT" -F "$IN" 2>/dev/null || true
-
 if [ "$MODE" = remove ]; then
+  while "$IPT" -D DOCKER-USER -s "$SUBNET" -j "$FWD" 2>/dev/null; do :; done
+  while "$IPT" -D INPUT -s "$SUBNET" -j "$IN" 2>/dev/null; do :; done
+  "$IPT" -F "$FWD" 2>/dev/null || true
+  "$IPT" -F "$IN" 2>/dev/null || true
   "$IPT" -X "$FWD" 2>/dev/null || true
   "$IPT" -X "$IN" 2>/dev/null || true
   echo "claude-agents firewall removed"
   exit 0
 fi
 
-"$IPT" -N "$FWD" 2>/dev/null || true
-"$IPT" -N "$IN" 2>/dev/null || true
-"$IPT" -N DOCKER-USER 2>/dev/null || true   # Docker reads this chain before its own rules
+SRC=""
+[ -n "${ALLOW_SRC:-}" ] && SRC="-s $ALLOW_SRC "
 
-for chain in "$FWD" "$IN"; do
-  "$IPT" -A "$chain" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+# The exceptions, as rules for one chain
+exceptions() {
   allow_list | while IFS=: read -r ip port; do
     if [ -n "$port" ]; then
-      "$IPT" -A "$chain" -d "$ip" -p tcp --dport "$port" -j RETURN
+      echo "-A $1 ${SRC}-d $ip -p tcp --dport $port -j RETURN"
     else
-      "$IPT" -A "$chain" -d "$ip" -j RETURN
+      echo "-A $1 ${SRC}-d $ip -j RETURN"
     fi
   done
-done
+}
 
-# Forwarded traffic: agents <-> browser is fine, private ranges are not, internet continues
-"$IPT" -A "$FWD" -d "$SUBNET" -j RETURN
-for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10; do
-  "$IPT" -A "$FWD" -d "$net" -j DROP
-done
-"$IPT" -A "$FWD" -j RETURN
+# Both chains, emptied and filled again in one commit. ":chain" creates it when missing and empties it.
+{
+  echo "*filter"
+  echo ":$FWD - [0:0]"
+  echo ":$IN - [0:0]"
+  for chain in "$FWD" "$IN"; do
+    echo "-A $chain -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN"
+    exceptions "$chain"
+  done
+  # Forwarded traffic: the containers of this network among themselves are fine, private ranges are not
+  echo "-A $FWD -d $SUBNET -j RETURN"
+  for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10; do
+    echo "-A $FWD -d $net -j DROP"
+  done
+  echo "-A $FWD -j RETURN"   # the internet continues
+  # Traffic to this host: nothing new from the containers (they use public DNS, see compose.yaml)
+  echo "-A $IN -j DROP"
+  echo "COMMIT"
+} | "$IPT-restore" --noflush
 
-# Traffic to this host: nothing new from the agents (they use public DNS, see compose.yaml)
-"$IPT" -A "$IN" -j DROP
+"$IPT" -N DOCKER-USER 2>/dev/null || true   # Docker reads this chain before its own rules
+"$IPT" -C DOCKER-USER -s "$SUBNET" -j "$FWD" 2>/dev/null || "$IPT" -I DOCKER-USER 1 -s "$SUBNET" -j "$FWD"
+"$IPT" -C INPUT -s "$SUBNET" -j "$IN" 2>/dev/null || "$IPT" -I INPUT 1 -s "$SUBNET" -j "$IN"
 
-"$IPT" -I DOCKER-USER 1 -s "$SUBNET" -j "$FWD"
-"$IPT" -I INPUT 1 -s "$SUBNET" -j "$IN"
-
-[ -n "$(allow_list)" ] && echo "exceptions: $(allow_list | tr '\n' ' ')"
-echo "claude-agents firewall active for $SUBNET"
+if [ -z "${QUIET:-}" ]; then
+  [ -n "$(allow_list)" ] && echo "exceptions for $SUBNET: $(allow_list | tr '\n' ' ')"
+  echo "claude-agents firewall active for $SUBNET"
+fi
+exit 0

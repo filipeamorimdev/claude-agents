@@ -9,9 +9,10 @@
 export const mcpServers = {
   browser: {
     description:
-      "Headless Chromium with persistent logins (the ad master's browser). " +
-      "To log in, type the secret NAMES OLX_EMAIL / OLX_PASSWORD; the real values are filled in for you.",
+      "Headless Chromium: each agent gets its own, which stays signed in. " +
+      "To log in, type the login NAMES from list_logins (e.g. OLX_PASSWORD); the real values are filled in for you.",
     config: { type: "http", url: "http://browser-admaster:8931/mcp" },
+    logins: true, // fills in the vault's logins: its agents get list_logins and request_login
   },
 
   // Example: Home Assistant. Also add its IP:8123 to FIREWALL_ALLOW, and set HA_TOKEN in the

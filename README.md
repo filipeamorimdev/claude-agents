@@ -29,7 +29,26 @@ Pick one: a Docker UI (OMV Compose, Portainer, Dockge) or the command line.
 Replacing an install made before the firewall became a container? See
 [Replacing an older install](#replacing-an-older-install) first.
 
-### Option A: Docker UI (recommended)
+### Portainer: the setup wizard (easiest)
+
+On the server Portainer manages, from a checkout of this repo:
+
+```bash
+sudo bash scripts/portainer.sh
+```
+
+It asks for your Claude token, a Portainer access token (or your Portainer login), and a GitHub token
+with `read:packages` while the images are private. It works out everything else: the system user and its
+uid/gid, the timezone, a free port, free subnets, a chat password, and which Portainer environment is this
+host. It also checks that the images on GHCR match this `compose.yaml` (if they don't, push to `main` and
+wait for the `images` workflow). Then it creates the stack in Portainer, runs the safeguard checks, and prints
+the chat address and password. Re-run it to change a setting or to update; it keeps what you set before.
+`--env-only` just writes the variables to a file to load in Portainer's stack editor. `--help` lists the rest.
+
+Step by step in Portainer's own screens (stack kept in sync with this repo), TrueNAS SCALE included:
+[docs/portainer.md](docs/portainer.md).
+
+### Option A: Docker UI (by hand)
 
 1. On the server, create a user for the agents' files and note its uid and gid:
 
@@ -51,8 +70,9 @@ Replacing an install made before the firewall became a container? See
 
    Everything else has a default; the full list is at the top of `compose.yaml`.
    Write a `$` in a value as `$$`.
-4. Deploy. The images come from GHCR: while the packages are private, run
-   `docker login ghcr.io` on the server once (a GitHub token with `read:packages`).
+4. Deploy. The images come from GHCR: while the packages are private, the UI needs a login for
+   `ghcr.io` (a GitHub token with `read:packages`). In Portainer: Registries → Add registry → Custom registry.
+   With the CLI: `docker login ghcr.io` on the server once.
 5. Check the safeguards: copy [`scripts/verify.sh`](scripts/verify.sh) to the server and run
    `sudo bash verify.sh`. Every line should be ✓, including "LAN host … blocked".
 
@@ -60,8 +80,8 @@ On first start the stack creates the folders in `DATA_DIR` and the default agent
 (`release-watch`, `agent-architect`, and `ad-master`, which starts disabled).
 To change a setting later, edit the variable and redeploy the stack. Data is kept.
 
-**Browser agent:** add `COMPOSE_PROFILES=browser` and its logins as
-`BROWSER_SECRETS=OLX_EMAIL=me@example.com;OLX_PASSWORD=...`, redeploy, then `docker exec claude-agents agents enable ad-master`.
+**Browser agent:** add `COMPOSE_PROFILES=browser`, redeploy, then `docker exec claude-agents agents enable ad-master`.
+Add its site logins in the chat (key icon), or wait for it to ask: see [Site logins](#site-logins).
 
 ### Option B: command line
 
@@ -101,14 +121,59 @@ docker compose up -d
 
 Open `http://<server-ip>:8090` and sign in.
 
-- **Chat with an agent:** choose the model and effort under the message box. The agent remembers them.
+- **Chat with an agent:** every message uses the model and effort set in the agent's details (tap its name to change them).
 - **Create an agent or a group:** tap the button next to "Agents" and pick **Agent** or **Group**.
   A new agent gets a random name (change it if you like); write what it should do, pick what it can
   use and tap **Save**. Or ask `agent-architect` to design one, then tap **Approve** under its reply
   (or use **Approvals**).
+- **What an agent can use:** every agent can always read and search the files in its own folder and
+  search the web. Anything more (writing files, opening web pages, connectors) you tick in its details,
+  or the agent asks for it in the chat and you tap **Approve** under its reply.
+- **Ask me first:** in an agent's details, tick the tools it must ask you about before each use
+  (writing files, shell, opening pages, a connector, its browser). It stops mid-task and waits: a card in its
+  chat and in **Approvals** (plus a notification) with exactly what it's about to do, and **Allow once**,
+  **Always allow** or **Deny**. Every agent also asks for your OK by itself before anything irreversible or
+  public you didn't ask for (publishing, sending, buying, deleting). No answer within
+  `APPROVAL_TIMEOUT_MINUTES` (30) is a no.
+- **Memory:** agents keep short notes between runs (what you prefer, facts they looked up, where they
+  left off) and see them on every run, scheduled ones included. You see and edit them in its details (or `/memory`).
+- **Delegation:** an agent with "Manage agents" can hand tasks to other agents (`delegate`). They run in
+  the background, several at once; each task shows under its reply with its status and result, and in the
+  other agent's chat. Results it didn't wait for come back to it in one follow-up message.
+- **Activity:** everything your agents did, newest first: what each run was asked, every command and
+  other tool call with its input and result, what the agent said and thought, how the run ended, and every
+  change, approval, memory edit, webhook, task and message between agents. Filter by agent or kind, search
+  it, tap **run N** to see one run, tap an entry for all of it. (`agents log` shows the same; tool calls
+  and changes are also in `docker logs`.)
+- **Terminal commands:** every agent can ask to run a command (`run_command`). You see the exact command,
+  the agent, its reason and what it could reach on your network in the chat (and in Approvals, with a push
+  notification) and tap **Run it**, **Always allow this command** or **Deny**. No answer in time is a no.
+  Commands run in the **command sandbox**, a separate container (`claude-agents-shell`) that has only the
+  agents' workspace folders, the internet and a few tools (`curl`, `jq`, `dig`, `ping`, `nc`, `ssh`): no
+  database, no logs, no config, no vault, none of the stack's variables, and no route to your LAN, this host,
+  the vault or the browsers. So a command you approved by mistake still can't read your secrets or touch the
+  log. It only takes commands the app signed (a key only the app holds), so an agent can't slip one in from
+  elsewhere. The request, who (or which rule) approved it and when, the command, its exit code and its output
+  are all in Activity.
+- **Commands without asking** (off by default): in an agent's details, under *Commands without asking*, add
+  rules for that agent: *Exactly* a command (`df -h`) or anything that *Starts with* one (`git status`,
+  `lan curl -s http://192.168.1.50:8123/api/`), and whether it may use your network then (none, read-only,
+  full). **Always allow this command** on a request adds an *Exactly* rule. Only plain commands match: any
+  `;` `&` `>` `<` `$` `` ` `` `(` `)` still asks, a pipeline (`a | b`) needs every part to match, and anything
+  about the log, the database, the agents CLI or purging always asks, whatever the rules say. Each one is in
+  Activity as *Auto-approved by rule #N*. At most 60 an hour per agent; after that it asks again. Agents can't
+  add rules. CLI: `agents commands <name>`, `agents commands <name> allow [--prefix] [--lan read|full] <command>`,
+  `agents commands remove <id>`.
+- **Your home network**: agents can't reach anything there until they ask in the chat and you grant that one
+  device. See [Home network](#home-network).
+- **The log is append-only.** Agents add to it by running and can read their own entries (`read_log`);
+  no agent tool changes or deletes an entry, and the database refuses any change or delete that isn't
+  your purge. Nothing is removed automatically. Only you purge it: **Purge…** on the Activity page (asks
+  for your password) or `docker exec -it claude-agents agents logs purge [--older-than DAYS] [--agent NAME]`
+  (asks you to type "purge"). The purge itself stays on record.
 - **Groups:** a group chat sends every message to each agent in it. Tap a group's name to edit it.
 - **Commands anywhere:** type `/` in the search box for commands that aren't tied to one chat, e.g.
-  `/ask release-watch what's new?`, `/run`, `/enable`, `/disable`, `/new`, `/group`.
+  `/ask release-watch what's new?`, `/run`, `/enable`, `/disable`, `/new`, `/group`, `/activity`.
 - Type `/help` in any chat for that chat's commands, and `@` to mention an agent.
 
 ## Push notifications
@@ -145,6 +210,25 @@ Notifications are end-to-end encrypted to each device, then delivered by its bro
 (Apple, Google or Mozilla), which can't read them. If a device turns notifications off, it shows as
 disconnected: turn them on again there.
 
+## Webhooks
+
+A webhook starts an agent when something happens elsewhere: a push on GitHub, a Home Assistant
+automation, an IFTTT or n8n flow, a script. In the agent's details, under **Webhooks**, give it a name
+and tap **Create**: you get a secret address like `https://<your-chat>/hooks/Xy3…`, shown once (the
+address is the key; the app keeps only a hash of it).
+
+A `POST` to that address starts a run with what was sent (body up to 64 KB, plus the query string and
+`X-…` headers like `X-GitHub-Event`). The agent is told it's data from outside, never instructions, and
+does what its own instructions say for such an event; the result lands in its chat like a scheduled run.
+Each webhook starts at most 30 runs an hour, and can be turned off or deleted any time.
+
+The chat itself stays on your network. To receive webhooks from the internet, publish **only** the
+`/hooks/` path, e.g. `tailscale funnel` with a path, or a reverse proxy location:
+
+```nginx
+location /hooks/ { proxy_pass http://<server-ip>:8090; }
+```
+
 ## Use your ChatGPT plan
 
 Agents can also run on OpenAI models (GPT-6.1 Sol, Astra, Terra, Luna) through
@@ -161,18 +245,20 @@ Claude and OpenAI agents can live side by side; pick the model per agent in the 
    ```
 
    The login is saved in `DATA_DIR/agents/home/.codex` and refreshes itself. Use your own account.
-3. Pick a GPT model under the message box, or `docker exec claude-agents agents set release-watch model=gpt-6.1-sol`.
+3. Pick a GPT model in the agent's details (tap its name), or `docker exec claude-agents agents set release-watch model=gpt-6.1-sol`.
    ChatGPT-only? Also set `DEFAULT_MODEL=gpt-6.1-sol` for new agents.
 
 Differences from Claude agents:
 
 - Codex works through shell commands, so Read/Write become sandboxed commands: an agent sees its
   own folder (writable only with Write or Edit) and nothing private (logins, logs, database,
-  other agents). It gets network only with WebFetch, and no shell at all without file tools.
+  other agents). It gets network only with WebFetch; its shell is read-only without Write or Edit.
 - Effort sets the reasoning level and caps the tool calls Codex reports per run (MCP calls, file
   edits, web searches; low 10 … max 100). Shell commands Codex runs through its code tool aren't
   reported, so they don't count. Codex may also start helper sub-agents; they run in the same sandbox.
 - Switching an agent between Claude and OpenAI starts a new conversation.
+- Codex can't pause a tool call for your OK, so tools set to **Ask me first** aren't given to an
+  OpenAI agent at all. Asking for your OK by itself (`request_approval`) works the same.
 - `CODEX_API_KEY` uses an OpenAI API key instead (billed per token); `CODEX_MODELS` changes the list.
 - Ubuntu 23.10+ hosts also restrict user namespaces with AppArmor. If `verify.sh` says the Codex
   sandbox can't start, run `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`
@@ -214,18 +300,106 @@ Command line:
 sudo ./install.sh --uninstall           # add --purge to also delete data and settings
 ```
 
+## Site logins
+
+The browser agent signs in to websites with logins kept in a **vault**: its own container that
+stores them encrypted (AES-256-GCM) in `DATA_DIR/vault`, which no other container mounts.
+
+- **Add or change them in the chat**: the key icon next to the bell (or `/logins`). You type the value
+  there and it goes straight to the vault; it never enters the database, the logs or an agent's context.
+- **Agents ask when they need one.** An agent that has to sign in somewhere new calls `request_login`:
+  a form appears under its reply with the fields that site needs (e.g. Email, Password). Save it and
+  the agent carries on by itself. The form can also let the browser open that site.
+- **Agents only see names**, like `VINTED_PASSWORD`. They type the name into the sign-in form and the
+  browser types the real value, and hides it from what it shows the agent.
+- **Each login works only for the agents you allow.** Saving a login an agent asked for allows that
+  agent; tick others under the key icon. Logins from `BROWSER_SECRETS` start with no agent: tick the
+  ones that may use them.
+- **Each agent has its own browser**, with its own cookies and sign-ins (`DATA_DIR/browsers/profiles/<agent>`)
+  and only the logins it's allowed. One agent can't use a site where another is signed in. A browser
+  starts when its agent first needs it and stops after `BROWSER_IDLE_MINUTES` (30) unused; at most
+  `BROWSER_MAX_AGENTS` (3) run at once. Screenshots go to `DATA_DIR/browsers/shots/<agent>`.
+- **Watch it, or take over.** The screen icon in its chat (or `/browser`) shows its page live. Tick
+  **Take control** to click, scroll and type in it yourself. When a site needs something only you can do
+  (a captcha, a code sent to you), the agent calls `request_takeover`: a card asks you to open its browser,
+  do it, and tap **Done, hand it back**, and it carries on from there.
+- The browser opens pages only on the sites listed under *Sites the browser can open*: `BROWSER_ALLOWED_ORIGINS`
+  plus the ones you add in the chat (`https://www.vinted.pt`, `vinted.pt`, or `*.vinted.pt`). A page on
+  one of them loads its images, scripts and sign-in frames from anywhere, never from your network.
+  Saving a login restarts that agent's browser (a few seconds); saving a site restarts them all.
+- Agents can't run their own code in the browser: a guard in front of the browsers drops Playwright's tools that
+  could expose a login (`browser_run_code_unsafe`, `browser_evaluate` and the network log).
+- Encrypted, not hashed: the browser has to type the real password. The key (`vault.key`) sits next
+  to the logins in `DATA_DIR/vault`, so keep that folder out of shared backups.
+- `BROWSER_SECRETS` (`NAME=value;NAME=value`) still works for logins you'd rather set as a variable;
+  they show in the chat as *from the stack's variables*.
+
+## Home network
+
+Nothing on your network is reachable by default. It all happens in the chat, no separate settings page:
+
+1. **Ask the agent** ("check my Home Assistant at 192.168.1.50"). It calls `request_network_access` with the
+   address (one IP and one port, or a URL; never a whole network), why, read-only or full, and whether its browser
+   needs it too. You get a card: *Grant access* gives that agent exactly that; *No* adds nothing.
+2. **Keys, when a device needs one.** The agent calls `request_device_key` and you get a second card: paste the
+   API key or token (Home Assistant's long-lived token, a TrueNAS API key, `user:password` for Basic auth), or for
+   SSH tap *Make a key*, add the public key it shows to the device's authorized keys, then *Done, I added it* (or
+   paste a private key of your own without a passphrase). The value goes straight to the LAN gateway, encrypted
+   there, and is added to the agent's requests on the way out. Agents never see it, and nothing shows it again.
+3. **Taking it back:** the agent's details → *What it can reach* → *On your network* lists its devices, with
+   *Describe*, *Remove* and, for ssh, *Trust new host key* (after you reset a device).
+
+The agent reaches a device from its commands, `lan curl -s http://192.168.1.50:8123/api/states`, and each of those
+commands still needs your OK unless a rule allows it. Always `http://`, even for a device on https: the gateway does
+the https and adds the key. Read-only is GET only; full access also allows changes, tunnels and ssh. Agents see what
+they have with `network_access`; `agents lan` lists every device and who may reach it.
+
+**In an agent's browser** (agents with the browser, granted with *its browser too*): it opens `http://IP:PORT/`
+(a router's admin page, for example), with no OK per page, while its commands still ask. Signing in with a form
+needs full access; the agent asks for the values with `request_login` like any site. Each browser reaches only its
+own agent's devices, through the gateway, which logs every request.
+
+**SSH**: an agent with full access runs `lan-ssh router nvram get productid`; the gateway signs in with the key it
+keeps and sends back only the output, and that command still waits for your OK unless a rule allows it. The
+device's host key is trusted the first time and checked after that. Every ssh command is in
+`docker logs claude-agents-lan`. A "starts with" rule such as `lan-ssh router nvram get` only matches when plain
+words follow it, so `nvram get 'x; reboot'` still asks you.
+
+How it's fenced: only the LAN gateway (`claude-agents-lan`) may leave for your network, and the firewall opens
+it to exactly the IP:port pairs granted to some agent (within seconds of a change, closed again when you take a
+grant away). The sandbox and the app can't reach them directly. Each command that may use the network gets a
+token for its agent that dies when the command ends, so one agent can't use another's devices. Every request
+through it is in `docker logs claude-agents-lan`. Device keys live in `DATA_DIR/lan` with their key file
+(`lan.key`): keep that folder out of shared backups, like `DATA_DIR/vault`.
+
+Not covered yet: fixing things on a host directly, beyond what one ssh command does. That's meant for a small runner
+on each host that runs only approved commands, still to come.
+
 ## Good to know
 
-- Use the chat on your home network or through a VPN. Don't expose it to the internet.
+- Use the chat on your home network or through a VPN. Don't expose it to the internet (only `/hooks/`
+  if you use [webhooks](#webhooks)).
 - Agents can't reach your LAN and only see their own folder. Claude agents get a shell only if you
   grant Bash; OpenAI agents run sandboxed commands (see [Use your ChatGPT plan](#use-your-chatgpt-plan)).
-  To let them reach one device (e.g. Home Assistant), set `FIREWALL_ALLOW=192.168.1.50:8123`.
+  To let an agent reach a device, ask it in the chat ([Home network](#home-network)).
+  `FIREWALL_ALLOW=192.168.1.50:8123` is only for connectors in `config/mcp-servers.mjs` (e.g. a Home Assistant
+  MCP server), and isn't per agent: any agent with WebFetch or Bash, or on an OpenAI model, could reach it too.
+  WebFetch itself never opens addresses on your network.
 - Agents and MCP servers are configured in `DATA_DIR/config/` (created on first start).
   A variable an MCP server needs (like `HA_TOKEN`) must also be listed in `compose.yaml`.
 - Browser logins: use passwords unique to those sites, and no 2FA seeds (the agent asks you for codes).
 - Two installs on one host: give each its own `AGENTS_SUBNET` and `UI_PORT`, and its own container
   names. Each install's firewall rules are named after its subnet, so they don't overwrite each other.
 - Logs: `docker logs -f claude-agents`. Check the safeguards: `sudo bash scripts/verify.sh`.
+  Each run also keeps its raw log in `DATA_DIR/agents/logs/<agent>/`. Those files and the Activity log
+  are kept until you purge them (see Activity above); chats and runs stay in the database.
+  An agent you gave **Bash** on a Claude model runs commands as the app's user, so the fence around the
+  log files and the database is not enforced by the system for it (OpenAI models run commands in a
+  sandbox that hides both). Grant Bash only to agents you'd trust with the server's data.
+- The command sandbox has what the app's image has (sh, node, npm, curl, jq, dig, ping, nc, ssh) and no way
+  to install system packages. All agents' workspace folders are mounted in it, so an approved command can read
+  another agent's files. It can't reach other machines itself: only through the LAN gateway, to devices you granted.
+- Changing `UI_PASSWORD` signs every browser out, and **Sign out** ends that session on the server too.
 
 ## License
 

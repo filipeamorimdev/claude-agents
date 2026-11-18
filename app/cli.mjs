@@ -3,8 +3,10 @@
 
 import path from "node:path";
 import { openStore, validateAgent, diff, MODELS, EFFORTS } from "./store.mjs";
-import { createEngine, loadConfig } from "./engine.mjs";
+import { createInterface } from "node:readline/promises";
+import { createEngine, loadConfig, purgeLogs } from "./engine.mjs";
 import { createPairing, sendCode, checkCode, testDevice, deviceStatus } from "./notify.mjs";
+import { lanClient } from "./lan.mjs";
 
 const DATA_DIR = process.env.DATA_DIR || "/data";
 const CONFIG_DIR = process.env.CONFIG_DIR || "/app/config";
@@ -29,6 +31,22 @@ const HELP = `agents: manage your agents
   agents export                    print all agents as JSON
   agents runs [name]               recent runs
   agents events                    audit log
+  agents log [name] [--kind K] [--run ID] [--find TEXT] [-n N]
+                                   everything agents did: requests, commands and other tool calls, what they said,
+                                   results, changes (K: start, say, think, tool, result, refused, end, event)
+  agents logs purge [--older-than DAYS] [--agent NAME]
+                                   delete log entries and run log files. Logs are kept until you do this:
+                                   nothing removes them automatically and agents can't. Asks you to confirm.
+
+Commands an agent may run without asking you (none by default; each one is still logged, marked auto-approved):
+  agents commands <name>           its rules
+  agents commands <name> allow [--prefix] [--lan read|full] <command...>
+                                   exactly this command (or, with --prefix, anything starting with it). --lan: what it
+                                   may reach on your network when it runs that way (default: nothing)
+  agents commands remove <id>      remove a rule: it asks again
+
+Your home network (devices agents may reach: set them in the chat, house icon):
+  agents lan                       every device and which agents may reach it
 
 Push notifications (the browser's own, on phones and computers) when an agent run ends:
   agents devices                   devices that get them
@@ -88,7 +106,7 @@ try {
     case "proposal": {
       const p = store.proposal(Number(need(args[0], "id"))) ?? fail(`no proposal #${args[0]}`);
       console.log(`#${p.id} ${p.kind} "${p.agent}" by ${p.proposed_by} (${p.status})\nreason: ${p.reason || "-"}\n`);
-      showDiff(diff(store.get(p.agent), p.config));
+      showDiff(diff(store.get(p.agent), p.status === "open" ? store.proposed(p) : p.config)); // an open one: what approving applies now
       break;
     }
     case "approve":
@@ -209,6 +227,74 @@ try {
         console.log(`${r.started_at.slice(0, 16)}  ${pad(r.agent, 20)} ${pad(r.trigger, 18)} ${pad(r.status ?? "running", 8)} ${r.turns ?? "-"} turns  ${(r.result ?? "").replace(/\s+/g, " ").slice(0, 60)}`);
       }
       break;
+    case "log": {
+      const opt = (flag) => { const i = args.indexOf(flag); return i === -1 ? null : need(args[i + 1], `a value after ${flag}`); };
+      const flagged = new Set(["--kind", "--run", "--find", "-n"].flatMap((f) => { const i = args.indexOf(f); return i === -1 ? [] : [i, i + 1]; }));
+      const name = args.find((a, i) => !flagged.has(i)) ?? null;
+      const kind = opt("--kind"), run = opt("--run"), n = Number(opt("-n") ?? 50);
+      const rows = store.logPage({ agent: name, kinds: kind ? kind.split(",") : null, run: run ? Number(run) : null, q: opt("--find"), limit: n > 0 ? n : 50 });
+      for (const r of rows.reverse()) {
+        console.log(`${r.at.slice(0, 19).replace("T", " ")}  ${pad(r.agent ?? r.actor ?? "", 18)} ${pad(r.run ? `#${r.run}` : "", 6)} ${pad(r.kind, 8)} ${r.text.slice(0, 200)}`);
+      }
+      if (!rows.length) console.log("Nothing in the log.");
+      break;
+    }
+    case "logs": {
+      if (args[0] !== "purge") fail(`unknown "logs ${args[0] ?? ""}". See: agents help`);
+      const opt = (flag) => { const i = args.indexOf(flag); return i === -1 ? null : need(args[i + 1], `a value after ${flag}`); };
+      const days = opt("--older-than"), agent = opt("--agent");
+      // Purging is the human's: it needs a person at a terminal, and it refuses to run from inside an agent's run.
+      if (process.env.AGENT_RUN) fail("agents can't purge the log");
+      if (!process.stdin.isTTY || !process.stdout.isTTY) fail("purging needs you at a terminal: docker exec -it claude-agents agents logs purge");
+      const { entries, oldest } = store.logStats();
+      const what = `${days ? `log entries and run log files older than ${days} days` : "ALL log entries and run log files"}${agent ? ` of ${agent}` : ""}`;
+      console.log(`The log has ${entries} entries${oldest ? `, the oldest from ${oldest.slice(0, 10)}` : ""}.`);
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await rl.question(`Delete ${what}? This can't be undone. Type "purge" to confirm: `);
+      rl.close();
+      if (answer.trim() !== "purge") { console.log("Nothing was deleted."); break; }
+      const r = await purgeLogs(store, DATA_DIR, { days: days ? Number(days) : null, agent }, HUMAN);
+      console.log(`✓ purged ${r.entries} log entries and ${r.files} run log file(s). The audit log (agents events) keeps a record of this.`);
+      break;
+    }
+    case "commands": {
+      if (process.env.AGENT_RUN) fail("agents can't change which commands run without asking");
+      const [first, sub, ...rest] = args;
+      if (first === "remove") {
+        const r = store.removeCommandRule(Number(need(sub, "rule id")), HUMAN);
+        console.log(`✓ removed rule #${r.id} of ${r.agent}: it asks again for \`${r.pattern}\``);
+        break;
+      }
+      const name = need(first, "agent name");
+      if (!store.get(name)) fail(`no agent "${name}"`);
+      if (sub === "allow") {
+        let kind = "exact", lan = "none";
+        const words = [];
+        for (let i = 0; i < rest.length; i++) {
+          if (rest[i] === "--prefix") kind = "prefix";
+          else if (rest[i] === "--lan") lan = need(rest[++i], "read or full after --lan");
+          else words.push(rest[i]);
+        }
+        const id = store.addCommandRule(name, { kind, pattern: need(words.join(" ") || null, "the command"), lan }, HUMAN);
+        console.log(`✓ rule #${id}: ${name} runs ${kind === "exact" ? "exactly" : "anything starting with"} \`${words.join(" ")}\` without asking` +
+          `${lan === "none" ? "" : ` (network: ${lan === "read" ? "read-only" : "full"})`}`);
+        break;
+      }
+      if (sub) fail(`unknown "commands ${name} ${sub}". See: agents help`);
+      const list = store.commandRules(name);
+      if (!list.length) { console.log(`${name} asks you before every command.`); break; }
+      for (const r of list) console.log(`#${String(r.id).padEnd(4)} ${pad(r.kind, 7)} ${pad(`lan:${r.lan}`, 9)} ${r.pattern}`);
+      break;
+    }
+    case "lan": {
+      const { targets, grants } = await lanClient().state();
+      if (!targets.length) { console.log("No devices: no agent can reach your network. Add them in the chat (house icon)."); break; }
+      for (const t of targets) {
+        const who = Object.entries(grants).filter(([, g]) => g[t.id]).map(([a, g]) => `${a} (${g[t.id] === "full" && t.mode === "full" ? "full" : "read-only"})`);
+        console.log(`${pad(t.id, 18)} ${pad(`${t.host}:${t.port}`, 22)} ${pad(t.mode === "full" ? "full ok" : "read-only", 10)} ${pad(t.credential ? `key: ${t.credential.header}` : "no key", 22)} ${pad(t.ssh ? `ssh: ${t.ssh.user}` : "", 16)} ${who.join(", ") || "no agent"}`);
+      }
+      break;
+    }
     case "events":
       for (const e of store.events()) console.log(`${e.at.slice(0, 16)}  ${pad(e.actor, 34)} ${pad(e.action, 15)} ${e.agent ?? ""}`);
       break;

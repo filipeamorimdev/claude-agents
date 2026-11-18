@@ -14,3 +14,6 @@ app/package-lock.json
 
 # Deploy zips
 *.zip
+
+# macOS
+.DS_Store

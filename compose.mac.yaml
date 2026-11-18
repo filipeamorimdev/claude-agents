@@ -11,6 +11,12 @@ services:
   claude-agents:
     volumes:
       - agents-data:/data
+  shell:
+    volumes:
+      - type: volume             # the workspaces inside that volume, and nothing else of it
+        source: agents-data
+        target: /workspaces
+        volume: { subpath: workspaces }
 
 volumes:
   agents-data:

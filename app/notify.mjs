@@ -1,5 +1,6 @@
 // Native push notifications (Web Push): every confirmed device gets one when an agent run ends,
-// whatever started it (schedule, chat, group, CLI, another agent).
+// whatever started it (schedule, chat, group, CLI, another agent, a webhook, a task), and when an agent
+// is waiting mid-run for the human's OK or for them to take over its browser.
 //
 // A device is a browser, or the chat installed as an app (Home Screen on iPhone/iPad), that turned
 // notifications on from the chat UI. Notifications go through that browser's own push service
@@ -21,12 +22,13 @@ const PAYLOAD_MAX = 3000;           // bytes of JSON; a push message holds at mo
 const CONTACT = "https://github.com/filipeamorimdev/claude-agents"; // the push services' contact for this sender
 const MAX_DEVICES = 10;
 const PAIR_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-const TRIGGERS = { schedule: "scheduled run", manual: "run now", chat: "chat", "ask:human": "asked from the CLI" };
+const TRIGGERS = { schedule: "scheduled run", manual: "run now", chat: "chat", "ask:human": "asked from the CLI", login: "after you saved a login" };
 
 const b64u = (buf) => Buffer.from(buf).toString("base64url");
 const fromB64u = (s) => Buffer.from(String(s), "base64url");
 const hash = (s) => crypto.createHash("sha256").update(s).digest("hex");
-const triggerLabel = (t) => TRIGGERS[t] ?? (t.startsWith("agent:") ? `asked by ${t.slice(6)}` : t.startsWith("group:") ? "group chat" : t);
+const triggerLabel = (t) => TRIGGERS[t] ?? (t.startsWith("agent:") ? `asked by ${t.slice(6)}` : t.startsWith("group:") ? "group chat"
+  : t.startsWith("webhook:") ? `webhook ${t.slice(8)}` : t.startsWith("task:") ? `task #${t.slice(5)}` : t === "tasks" ? "tasks came back" : t);
 export const NAME_RE = /^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$/;
 const NAME_RULE = "name: 2-32 chars, lowercase letters, digits and dashes";
 
@@ -216,6 +218,26 @@ export async function notifyRun(store, { agent, trigger, ok, result, model, effo
   await Promise.all(devices.map(async (d) => {
     try {
       await push(store, d, data(), ok ? "normal" : "high");
+      store.deviceSent(d.name, null);
+    } catch (e) {
+      store.deviceSent(d.name, e.message);
+      log("notify", `could not notify ${d.name}: ${e.message}`);
+    }
+  }));
+}
+
+/** An agent is waiting mid-run for the human (an "ask first" tool, request_approval or request_takeover): ask on every device. */
+export async function notifyAction(store, { agent, kind, tool, title }, log) {
+  const devices = store.devices().filter((d) => d.verifiedAt && d.endpoint);
+  if (!devices.length) return;
+  const name = store.get(agent)?.displayName || agent;
+  const data = {
+    title: kind === "takeover" ? `${name} needs you in its browser` : tool === "LAN" ? `${name} wants to reach a device on your network` : tool === "PRIVATE" ? `${name} asks to use private data (rule zero)` : tool === "LAN_KEY" ? `${name} needs a key for a device on your network` : `${name} is waiting for your OK`,
+    body: String(title ?? "").slice(0, 1500), url: `/#agent=${agent}`, tag: `action-${agent}`,
+  };
+  await Promise.all(devices.map(async (d) => {
+    try {
+      await push(store, d, data, "high");
       store.deviceSent(d.name, null);
     } catch (e) {
       store.deviceSent(d.name, e.message);

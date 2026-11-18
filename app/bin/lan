@@ -1,0 +1,13 @@
+#!/bin/sh
+# lan <command>: run one command through the LAN gateway, to the devices on your network this agent was granted.
+#   lan curl -s http://192.168.1.50:8123/api/states      always http:// (the gateway does https and adds the key)
+#   ssh -o ProxyCommand='lan-connect %h %p' user@192.168.1.60   (full access only)
+# Works only inside a command that was given network access (LAN_PROXY, set per command by the sandbox).
+if [ -z "${LAN_PROXY:-}" ]; then
+  echo "lan: this command has no access to your network (no devices were granted to this agent, or its approval gave none)" >&2
+  exit 3
+fi
+[ $# -gt 0 ] || { echo "usage: lan <command>   e.g. lan curl -s http://192.168.1.50:8123/api/" >&2; exit 2; }
+export http_proxy="$LAN_PROXY" HTTP_PROXY="$LAN_PROXY" https_proxy="$LAN_PROXY" HTTPS_PROXY="$LAN_PROXY" ALL_PROXY="$LAN_PROXY" all_proxy="$LAN_PROXY"
+unset no_proxy NO_PROXY
+exec "$@"

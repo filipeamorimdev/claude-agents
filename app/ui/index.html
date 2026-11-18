@@ -56,8 +56,8 @@ button { cursor: pointer; }
 .login .err { color: var(--danger); min-height: 1.4em; margin: 8px 0 0; font-size: 14px; }
 
 /* ---------- shell ---------- */
-.app { display: grid; grid-template-columns: 340px 1fr; height: 100dvh; }
-.side { background: var(--surface); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.app { display: flex; height: 100dvh; }
+.side { width: 340px; flex: none; background: var(--surface); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
 .side-head { display: flex; align-items: center; gap: 8px; padding: 16px 16px 8px; min-height: 60px; }
 .side-head h1 { font: 650 22px/1 var(--font-head); margin: 0; flex: 1; letter-spacing: -.01em; }
 .icon-btn { border: 0; background: transparent; width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; color: var(--muted); }
@@ -88,18 +88,30 @@ button { cursor: pointer; }
 .members label { display: grid; grid-template-columns: auto auto 1fr; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 10px; cursor: pointer; }
 .members label:hover { background: var(--surface-2); }
 .members input { width: 18px; height: 18px; accent-color: var(--cobalt); margin: 0; }
+.members label:has(input:disabled) { cursor: default; }
 .members .desc { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .field { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
 textarea.field { resize: vertical; min-height: 140px; line-height: 1.45; }
 .field-hint { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; }
-.avatar .live { position: absolute; right: -3px; bottom: -3px; width: 13px; height: 13px; border-radius: 50%; background: #2BB673; border: 2.5px solid var(--surface); }
+.avatar .live-dot { position: absolute; right: -3px; bottom: -3px; width: 13px; height: 13px; border-radius: 50%; background: #2BB673; border: 2.5px solid var(--surface); }
+.avatar .live-dot.waiting { background: var(--amber); }
 @media (prefers-reduced-motion: no-preference) {
-  .avatar .live { animation: pulse 1.6s ease-in-out infinite; }
+  .avatar .live-dot { animation: pulse 1.6s ease-in-out infinite; }
   @keyframes pulse { 50% { transform: scale(.75); } }
 }
 
 /* ---------- main pane ---------- */
-.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.main { display: flex; flex-direction: column; flex: 1 1 0; min-width: 320px; min-height: 0; }
+.app.side-collapsed .side { display: none; }
+.side-toggle svg { display: block; }
+/* the agent's browser, docked beside the chat; drag the bar between them to resize */
+.split { flex: none; width: 7px; margin: 0 -3px; z-index: 2; cursor: col-resize; position: relative; touch-action: none; }
+.split::after { content: ""; position: absolute; inset: 0 3px; background: var(--line); transition: background .15s; }
+.split:hover::after, .split:focus-visible::after, .split.dragging::after { background: var(--cobalt); inset: 0 2px; }
+.split:focus-visible { outline: none; }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing .dock, body.resizing .main { pointer-events: none; }
+.dock { flex: 0 1 var(--dock-w, 640px); min-width: 300px; background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
 .chat-head { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--line); min-height: 64px; }
 .chat-head .who { flex: 1; min-width: 0; border: 0; background: transparent; text-align: left; padding: 0; }
 .chat-head .title { font: 650 17px/1.2 var(--font-head); }
@@ -160,11 +172,6 @@ textarea.field { resize: vertical; min-height: 140px; line-height: 1.45; }
 .compose-row textarea { flex: 1; resize: none; border: 1px solid var(--line); background: var(--surface-2); border-radius: 14px; padding: 10px 14px; max-height: 180px; min-height: 44px; line-height: 1.4; }
 .send { width: 44px; height: 44px; border-radius: 14px; border: 0; background: var(--cobalt); color: #fff; display: grid; place-items: center; flex: none; }
 .send:disabled { opacity: .45; cursor: default; }
-.settings { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
-.pill { position: relative; display: inline-flex; align-items: center; gap: 6px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; font-size: 13px; color: var(--muted); }
-.pill select { appearance: none; border: 0; background: transparent; color: var(--ink); font-weight: 600; padding-right: 14px; cursor: pointer; }
-.pill::after { content: ""; position: absolute; right: 10px; top: 50%; width: 6px; height: 6px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: translateY(-70%) rotate(45deg); pointer-events: none; }
-.settings .hint { color: var(--muted); font-size: 12.5px; margin-left: auto; }
 
 /* @agent / slash-command suggestions */
 .composer-inner { position: relative; }
@@ -200,6 +207,149 @@ textarea.field { resize: vertical; min-height: 140px; line-height: 1.45; }
 .ask .actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 10px; flex-wrap: wrap; }
 .ask-status { font-size: 13.5px; font-weight: 600; color: var(--muted); }
 .ask-status.approved { color: #2BB673; }
+/* a login an agent asked for: typed here, sent straight to the vault */
+.lf { display: grid; gap: 4px; margin-top: 10px; font-size: 13.5px; font-weight: 600; }
+.lf code, .login-row code { font: 12px var(--font-code); color: var(--muted); font-weight: 400; }
+.lf-allow { display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: 13.5px; }
+.lf-allow input { width: 18px; height: 18px; accent-color: var(--cobalt); margin: 0; }
+.login-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.login-row:first-of-type { border-top: 0; }
+.login-row .desc { color: var(--muted); font-size: 13px; }
+.login-row .row-actions { display: flex; gap: 6px; grid-row: span 2; flex-wrap: wrap; justify-content: flex-end; }
+.login-row .replace { grid-column: 1 / -1; display: flex; gap: 8px; }
+.chip.site { display: inline-flex; align-items: center; gap: 2px; }
+.grants { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
+.grants label { display: inline-flex; gap: 5px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 2px 8px; color: var(--ink); cursor: pointer; }
+.grants label:has(input:checked) { border-color: var(--cobalt); background: color-mix(in srgb, var(--cobalt) 10%, transparent); }
+.grants input { margin: 0; accent-color: var(--cobalt); }
+.chip.site button { border: 0; background: none; color: var(--muted); padding: 0 2px; font-size: 12px; line-height: 1; }
+.chip.site button:hover { color: var(--danger); }
+/* an agent waiting mid-run (a tool to allow, an OK, its browser), and tasks it delegated */
+.ask details { margin-top: 8px; }
+.ask summary { cursor: pointer; color: var(--muted); font-size: 13.5px; }
+.ask pre.details { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); border-radius: 8px; padding: 8px 10px; font: 12px/1.4 var(--font-code); max-height: 220px; overflow: auto; margin: 6px 0 0; }
+.ask .md { margin-top: 6px; font-size: 14px; }
+.ask .note-in { margin-top: 10px; }
+.ask.task { border-left-color: var(--cobalt); }
+.ask.task.done { border-left-color: var(--line); }
+.ask-status.working { color: var(--cobalt); }
+
+/* activity (audit log) */
+.avatar.activity { background: var(--cobalt); }
+.activity { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 2px; }
+.activity .day { margin-top: 14px; }
+.ev { display: grid; grid-template-columns: 64px 8px 1fr; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 10px; font-size: 14px; background: var(--surface); }
+.ev time { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ev i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); align-self: center; }
+.ev .txt { overflow-wrap: anywhere; min-width: 0; }
+.ev.k-run i { background: #2BB673; } .ev.k-ask i { background: var(--amber); } .ev.k-key i { background: var(--danger); }
+.ev.k-task i, .ev.k-hook i { background: var(--cobalt); } .ev.k-mem i { background: #9B6BD6; }
+.activity-filter { border: 1px solid var(--line); background: var(--surface-2); border-radius: 10px; padding: 6px 10px; max-width: 46%; }
+.act-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
+.act-bar .field { flex: 1 1 180px; width: auto; padding: 7px 10px; }
+.act-bar .activity-filter { max-width: none; }
+.ev.open-able { cursor: pointer; }
+.ev.open-able:hover { background: var(--surface-2); }
+.ev .txt .line { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.ev .txt b { font-weight: 650; }
+.ev .txt .tag { color: var(--muted); font-size: 12.5px; margin-right: 6px; }
+.ev .txt .run { border: 0; background: none; color: var(--cobalt); font-size: 12.5px; padding: 0 0 0 6px; }
+.ev .txt pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); border-radius: 8px; padding: 8px 10px; font: 12.5px/1.45 var(--font-code); margin: 6px 0 2px; max-height: 420px; overflow: auto; cursor: text; }
+.ev.k-tool i { background: var(--cobalt); } .ev.k-good i { background: #2BB673; } .ev.k-bad i { background: var(--danger); } .ev.k-think i { background: #9B6BD6; }
+.ev.sub { padding-left: 26px; color: var(--muted); }
+.radio-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+/* interactions: each run start to finish */
+.segs { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; flex: none; }
+.seg { border: 0; background: var(--surface-2); color: var(--muted); padding: 6px 11px; font-size: 13.5px; }
+.seg.on { background: var(--cobalt); color: var(--cobalt-ink); }
+.pill { display: inline-block; border-radius: 999px; padding: 1px 9px; font-size: 12.5px; font-weight: 600; white-space: nowrap; background: var(--surface-2); color: var(--muted); }
+.pill.good { background: rgba(43,182,115,.14); color: #1d7f50; } .pill.bad { background: rgba(194,54,43,.12); color: var(--danger); }
+.pill.warn { background: var(--amber-soft); color: #8a5d00; } .pill.live { background: rgba(36,80,211,.12); color: var(--cobalt); }
+.bad-t { color: var(--danger); }
+.irow { display: grid; grid-template-columns: 36px 1fr; gap: 12px; text-align: left; width: 100%; border: 1px solid var(--line); border-left: 4px solid var(--line);
+  background: var(--surface); border-radius: 12px; padding: 12px 14px; margin-top: 8px; color: var(--ink); font: inherit; cursor: pointer; }
+.irow:hover { background: var(--surface-2); }
+.irow.k-good { border-left-color: #2BB673; } .irow.k-bad { border-left-color: var(--danger); } .irow.k-warn { border-left-color: var(--amber); } .irow.k-live { border-left-color: var(--cobalt); }
+.irow .avatar { width: 36px; height: 36px; font-size: 13px; }
+.imain { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.itop { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.itop time { margin-left: auto; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.trig { color: var(--muted); font-size: 13px; }
+.ireq { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 14.5px; overflow-wrap: anywhere; white-space: pre-line; }
+.ires { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--muted); font-size: 13.5px; overflow-wrap: anywhere; }
+.muted, .none { color: var(--muted); font-style: italic; margin: 0; }
+.imeta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; color: var(--muted); font-size: 12.5px; }
+.imeta .rid { margin-left: auto; }
+.interaction { gap: 12px; padding-bottom: 32px; }
+.itools { display: flex; gap: 8px; align-items: center; position: sticky; top: 0; z-index: 2; background: var(--paper); padding: 6px 0; }
+.ihead, .isec { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+.ihead-top { display: flex; gap: 12px; align-items: center; }
+.ihead-top > div:nth-child(2) { flex: 1; min-width: 0; }
+.iname { font: 650 17px/1.25 var(--font-head); }
+.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px 18px; margin: 14px 0 0; }
+.fact dt { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.fact dd { margin: 2px 0 0; font-size: 14px; overflow-wrap: anywhere; }
+.isec h3 { font: 650 15px/1.3 var(--font-head); margin: 0 0 10px; }
+.req-box { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); border-radius: 10px; padding: 10px 12px; font-size: 14.5px; max-height: 360px; overflow: auto; }
+.steps { display: flex; flex-direction: column; gap: 8px; position: relative; }
+.step { border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 10px; padding: 9px 12px; background: var(--surface); min-width: 0; }
+.step.tool { border-left-color: var(--cobalt); } .step.k-good { border-left-color: #2BB673; } .step.k-bad { border-left-color: var(--danger); background: rgba(194,54,43,.04); }
+.step.k-live { border-left-color: var(--cobalt); }
+.step.think { border-left-color: #9B6BD6; background: var(--surface-2); } .step.say { border-left-color: var(--ink); } .step.event { border-left-color: var(--amber); background: var(--amber-soft); }
+.shead { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13.5px; }
+.shead .sk { font-weight: 650; }
+.shead time { margin-left: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.shead .num { display: inline-grid; place-items: center; min-width: 22px; height: 22px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--line); font-size: 12px; font-weight: 650; }
+.step .what { margin: 6px 0 2px; font-size: 14px; overflow-wrap: anywhere; }
+.step .md { margin-top: 6px; font-size: 14.5px; }
+.step pre, .blk pre, .kv pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); border-radius: 8px; padding: 8px 10px; font: 12.5px/1.45 var(--font-code); margin: 4px 0 0; max-height: 380px; overflow: auto; }
+.step.think pre.prose { font: italic 13.5px/1.5 var(--font); background: var(--surface); }
+.blk { margin-top: 6px; }
+.blk summary { cursor: pointer; color: var(--muted); font-size: 12.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.blk summary .note { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 8px; }
+.blk .k { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; margin: 4px 0 0; align-items: start; }
+.kv dt { color: var(--muted); font-size: 12.5px; padding-top: 9px; font-family: var(--font-code); }
+.kv dd { margin: 0; min-width: 0; }
+.kv pre { margin: 0; }
+.appr { margin: 4px 0 0; padding-left: 18px; font-size: 13.5px; } .appr time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.refused { margin-top: 6px; color: var(--danger); font-size: 13.5px; font-weight: 600; }
+.link { border: 0; background: none; color: var(--cobalt); padding: 0; font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.step.event .link { margin-top: 4px; font-size: 13.5px; }
+.outcome { border-left: 4px solid var(--line); } .outcome.k-good { border-left-color: #2BB673; } .outcome.k-bad { border-left-color: var(--danger); }
+.outcome.k-warn { border-left-color: var(--amber); } .outcome.k-live { border-left-color: var(--cobalt); }
+@media (prefers-color-scheme: dark) { .pill.good { color: #5fd69a; } .pill.warn { color: var(--amber); } }
+@media (max-width: 760px) { .segs .seg { padding: 6px 8px; font-size: 12.5px; } .kv { grid-template-columns: 1fr; } .kv dt { padding-top: 0; } }
+.radio-row input[type=number] { width: 84px; padding: 6px 8px; }
+
+/* agent drawer: memory, webhooks, ask first */
+.mem-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: start; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.mem-row:first-child { border-top: 0; }
+.mem-row .by { color: var(--muted); font-size: 12px; }
+.mem-row .row-actions { display: flex; gap: 6px; }
+.inline-add { display: flex; gap: 8px; margin-top: 8px; }
+.inline-add select.field { width: auto; flex: 0 0 auto; }
+.grants select { border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; background: var(--surface-2); color: var(--ink); font-size: 13px; }
+.grant-pick { display: inline-flex; gap: 6px; align-items: center; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.form-grid .wide { grid-column: 1 / -1; }
+.check-row { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+@media (max-width: 520px) { .form-grid { grid-template-columns: 1fr; } }
+.hook-url { display: flex; gap: 8px; align-items: center; background: var(--amber-soft); border-radius: 10px; padding: 8px 10px; margin-top: 8px; }
+.hook-url code { flex: 1; min-width: 0; overflow-wrap: anywhere; font: 12px var(--font-code); }
+.btn.sm { padding: 3px 9px; font-size: 13px; }
+
+/* live view of an agent's browser */
+.drawer.wide { width: min(1040px, 100%); }
+.live { position: relative; background: #0b0f17; border-radius: 12px; overflow: hidden; min-height: 120px; display: grid; place-items: center; }
+.live img { display: block; width: 100%; height: auto; user-select: none; }
+.live.control { outline: 3px solid var(--amber); outline-offset: -3px; }
+.live.control img { cursor: crosshair; }
+.live-bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.live-bar .grow { flex: 1; min-width: 160px; }
+.live-status { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-control { display: inline-flex; gap: 6px; align-items: center; font-weight: 600; font-size: 14px; }
+.live-control input { width: 18px; height: 18px; accent-color: var(--amber); margin: 0; }
 
 /* approvals */
 .cards { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
@@ -241,8 +391,12 @@ details.prompt pre { white-space: pre-wrap; background: var(--surface-2); border
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: var(--surface); padding: 10px 16px; border-radius: 12px; z-index: 30; font-size: 14px; max-width: calc(100% - 32px); }
 
 @media (max-width: 760px) {
-  .app { grid-template-columns: 1fr; }
+  .side { width: 100%; }
+  .main { min-width: 0; }
   .app.in-chat .side { display: none; }
+  .app.side-collapsed:not(.in-chat) .side { display: flex; }
+  .side-toggle, .split { display: none; }
+  .dock { position: fixed; inset: 0; z-index: 18; min-width: 0; }
   .app:not(.in-chat) .main { display: none; }
   .back { display: grid; }
   .msg { max-width: 92%; }
@@ -268,6 +422,9 @@ details.prompt pre { white-space: pre-wrap; background: var(--surface-2); border
       <h1>Agents</h1>
       <button class="icon-btn" id="devices-btn" title="Push notifications" aria-label="Push notifications">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>
+      </button>
+      <button class="icon-btn" id="logins-btn" title="Site logins (vault)" aria-label="Site logins">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 9.2-9.2M17 6l3 3M14.5 8.5l2 2"/></svg>
       </button>
       <button class="icon-btn" id="new-agent" title="New agent or group" aria-label="New agent or group">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 20c0-3 2.7-5 6-5 1.4 0 2.6.3 3.6.9M18 14v6M15 17h6"/></svg>
@@ -301,14 +458,11 @@ details.prompt pre { white-space: pre-wrap; background: var(--surface-2); border
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.4 21 12 3.4 3.6 3.3 10l12.7 2-12.7 2z"/></svg>
           </button>
         </div>
-        <div class="settings" id="settings">
-          <label class="pill">Model <select id="model"></select></label>
-          <label class="pill">Effort <select id="effort"></select></label>
-          <span class="hint" id="settings-hint">Remembered for this agent</span>
-        </div>
       </div>
     </footer>
   </main>
+  <div class="split" id="split" role="separator" aria-orientation="vertical" aria-label="Resize the browser" tabindex="0" hidden></div>
+  <section class="dock" id="dock" hidden></section>
 </div>
 
 <div id="drawer-root"></div>
@@ -358,7 +512,9 @@ const initials = (name) => {
   const caps = words.filter((w) => w[0] !== w[0].toLowerCase()); // "Matias, the Market Researcher" -> MM
   return (caps.length >= 2 ? caps : words).slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "?";
 };
-const avatar = (name, size = "", live = false) => h("div", { class: `avatar ${size}`, style: `--hue:${hueOf(name)}`, "aria-hidden": "true" }, initials(name), live && h("i", { class: "live" }));
+const avatar = (name, size = "", live = false) => h("div", { class: `avatar ${size}`, style: `--hue:${hueOf(name)}`, "aria-hidden": "true" }, initials(name), live && h("i", { class: `live-dot${live === "waiting" ? " waiting" : ""}` }));
+// "waiting" when it has stopped mid-run for your OK, true while it works, false when idle
+const dotOf = (name) => S.waiting.has(name) ? "waiting" : S.running.has(name);
 const timeOf = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const whenOf = (iso) => {
   const d = new Date(iso), now = new Date();
@@ -433,10 +589,16 @@ function md(src) {
 
 // ---------------- state ----------------
 const S = {
-  agents: [], groups: [], models: [], modelGroups: [], efforts: {}, tools: [], proposals: 0,
-  view: null,            // { kind: "agent"|"group"|"approvals", name? (agent), id? (group) }
-  messages: [], attachments: [], progress: {}, running: new Set(), live: new Set(), filter: "",
+  agents: [], groups: [], models: [], modelGroups: [], efforts: {}, tools: [], baseTools: [], proposals: 0, actions: 0,
+  view: null,            // { kind: "agent"|"group"|"approvals"|"activity", name? (agent), id? (group) }
+  activity: [], activityAgent: "", activityMore: false, // the log as loaded so far, and its filters
+  activityKinds: "", activityQ: "", activityRun: null, activityOpen: new Map(), // kind of entry, text to find, one run; opened entries (id -> detail)
+  activityMode: "runs",  // "runs": one card per interaction (request to result); "entries": every log line
+  runs: [], runsMore: false, runStatus: "", runQ: "", runOpen: null, runData: null, // interactions loaded, filters, the one open
+  messages: [], older: false, // the open chat as loaded so far, and whether there are earlier messages to show
+  attachments: [], progress: {}, running: new Set(), waiting: new Set(), live: new Set(), filter: "",
   pal: null, palIndex: 0, cmdFrom: "search", // command modal: what it offers, the highlighted item, where "/" was typed
+  logins: { available: false, logins: [], sites: [] }, // the vault: names and sites only, never values
 };
 const MODEL_LABEL = {
   haiku: "Haiku", sonnet: "Sonnet", opus: "Opus",
@@ -447,7 +609,7 @@ const EFFORT_LABEL = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra
 
 async function loadState() {
   const st = await api("GET", "/api/state");
-  Object.assign(S, { agents: st.agents, groups: st.groups, models: st.models, modelGroups: st.modelGroups, efforts: st.efforts, tools: st.tools, proposals: st.proposals, devices: st.devices, vapidKey: st.vapidKey });
+  Object.assign(S, { agents: st.agents, groups: st.groups, models: st.models, modelGroups: st.modelGroups, efforts: st.efforts, tools: st.tools, baseTools: st.baseTools ?? [], proposals: st.proposals, actions: st.actions ?? 0, waiting: new Set(st.waiting ?? []), devices: st.devices, vapidKey: st.vapidKey });
   // live updates (SSE) win over the snapshot, which can lag a run by a moment
   S.running = new Set([...st.agents.filter((a) => a.running).map((a) => a.name), ...S.live]);
   renderList();
@@ -458,7 +620,8 @@ const curGroup = () => S.view?.kind === "group" ? S.groups.find((g) => g.id === 
 const groupAvatar = (g, size = "") => {
   const el = h("div", { class: `avatar ${size}`, style: `--hue:${hueOf(g.name)}`, "aria-hidden": "true" });
   el.innerHTML = '<svg width="55%" height="55%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM2 20c0-3 2.7-5 6-5s6 2 6 5M14 15.3c.6-.2 1.3-.3 2-.3 3.3 0 6 2 6 5"/></svg>';
-  if (g.members.some((m) => S.running.has(m))) el.append(h("i", { class: "live" }));
+  const waiting = g.members.some((m) => S.waiting.has(m));
+  if (waiting || g.members.some((m) => S.running.has(m))) el.append(h("i", { class: `live-dot${waiting ? " waiting" : ""}` }));
   return el;
 };
 
@@ -470,25 +633,30 @@ function renderList() {
     class: `row${off ? " off" : ""}`, "aria-current": cur && key === `${cur.kind}:${cur.name ?? cur.id ?? ""}` ? "true" : "false", onclick,
   }, av, h("div", { style: "min-width:0" }, h("div", { class: "name" }, h("span", {}, title), extra), h("div", { class: "preview" }, preview)), when);
 
+  const waiting = S.proposals + S.actions;
   list.append(item("approvals:", h("div", { class: "avatar approvals", "aria-hidden": "true" }, "✓"),
-    "Approvals", S.proposals ? `${S.proposals} waiting for you` : "Nothing to review",
-    h("div", { class: "when" }), S.proposals ? h("span", { class: "badge" }, S.proposals) : null, () => open({ kind: "approvals" })));
+    "Approvals", S.actions ? `${S.actions} agent${S.actions > 1 ? "s" : ""} waiting for your OK` : waiting ? `${waiting} waiting for you` : "Nothing to review",
+    h("div", { class: "when" }), waiting ? h("span", { class: "badge" }, waiting) : null, () => open({ kind: "approvals" })));
+  const clock = h("div", { class: "avatar activity", "aria-hidden": "true" });
+  clock.innerHTML = '<svg width="50%" height="50%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+  list.append(item("activity:", clock, "Activity", "Everything your agents did", h("div", { class: "when" }), null, () => { S.runOpen = null; open({ kind: "activity" }); }));
   list.append(h("div", { class: "divider", role: "separator" }));
 
   const f = S.filter.toLowerCase();
-  const groups = S.groups.filter((g) => !f || g.name.toLowerCase().includes(f) || g.members.some((m) => m.includes(f)));
+  const byLast = (x, y) => (y.last?.created_at ?? "").localeCompare(x.last?.created_at ?? "");
+  const groups = S.groups.filter((g) => !f || g.name.toLowerCase().includes(f) || g.members.some((m) => m.includes(f))).sort(byLast);
   for (const g of groups) {
-    const busy = g.members.filter((m) => S.running.has(m));
+    const busy = g.members.filter((m) => S.running.has(m)), asking = g.members.filter((m) => S.waiting.has(m));
     list.append(item(`group:${g.id}`, groupAvatar(g), g.name,
-      busy.length ? `${busy[0]} is working…` : g.last ? previewOf(g.last) : g.members.join(", "),
+      asking.length ? `${asking[0]} is waiting for your OK` : busy.length ? `${busy[0]} is working…` : g.last ? previewOf(g.last) : g.members.join(", "),
       h("div", { class: "when" }, g.last ? whenOf(g.last.created_at) : ""), null, () => open({ kind: "group", id: g.id })));
   }
   if (groups.length) list.append(h("div", { class: "divider", role: "separator" }));
 
-  for (const a of S.agents.filter((a) => !f || a.name.includes(f) || labelOf(a.name).toLowerCase().includes(f) || a.description.toLowerCase().includes(f))) {
+  for (const a of S.agents.filter((a) => !f || a.name.includes(f) || labelOf(a.name).toLowerCase().includes(f) || a.description.toLowerCase().includes(f)).sort(byLast)) {
     const running = S.running.has(a.name);
-    list.append(item(`agent:${a.name}`, avatar(a.name, "", running), labelOf(a.name),
-      running ? "Working…" : a.last ? previewOf(a.last) : a.description || cronText(a.schedule),
+    list.append(item(`agent:${a.name}`, avatar(a.name, "", dotOf(a.name)), labelOf(a.name),
+      S.waiting.has(a.name) ? "Waiting for your OK" : running ? "Working…" : a.last ? previewOf(a.last) : a.description || cronText(a.schedule),
       h("div", { class: "when" }, a.last ? whenOf(a.last.created_at) : ""), null,
       () => open({ kind: "agent", name: a.name }), !a.enabled));
   }
@@ -499,19 +667,48 @@ const previewOf = (m) => `${m.role === "human" ? "You: " : m.role === "agent" &&
 let openSeq = 0;
 async function open(view) {
   const seq = ++openSeq;
-  S.view = view; S.messages = []; S.attachments = []; renderAttachments();
+  S.view = view; S.messages = []; S.older = false; S.attachments = []; renderAttachments();
   $("#app").classList.add("in-chat");
   renderList(); renderHead();
   const stream = $("#stream"); stream.replaceChildren();
-  $("#composer").hidden = view.kind === "approvals";
-  $("#settings").hidden = view.kind !== "agent";
+  const chat = view.kind === "agent" || view.kind === "group";
+  $("#composer").hidden = !chat;
   $("#attach").hidden = view.kind !== "agent";
   $("#text").placeholder = view.kind === "agent" ? `Message ${labelOf(view.name)}, or /help` : view.kind === "group" ? `Message everyone in ${curGroup()?.name}, or /help` : "";
   closeSuggest();
-  if (view.kind === "agent") { fillSettings(); const r = await api("GET", `/api/chats/${view.name}/messages`); if (seq !== openSeq) return; S.messages = r.messages; renderMessages(); }
-  if (view.kind === "group") { const r = await api("GET", `/api/groups/${view.id}/messages`); if (seq !== openSeq) return; S.messages = r.messages; renderMessages(); }
+  if (chat) { const r = await api("GET", chatUrl(view)); if (seq !== openSeq) return; S.messages = r.messages; S.older = r.messages.length === PAGE; renderMessages(); }
   if (view.kind === "approvals") renderApprovals();
-  if (view.kind !== "approvals" && matchMedia("(min-width: 761px)").matches) $("#text").focus();
+  if (view.kind === "activity") renderActivity();
+  if (chat && matchMedia("(min-width: 761px)").matches) $("#text").focus();
+}
+const PAGE = 60; // messages the server sends at a time: a chat opens with the latest, "Show earlier messages" gets the ones before
+const chatOpen = () => S.view?.kind === "agent" || S.view?.kind === "group";
+const chatUrl = (v) => v.kind === "agent" ? `/api/chats/${v.name}/messages` : `/api/groups/${v.id}/messages`;
+// The open chat again from the server (a task under a reply moved on, or the connection was down for a while):
+// what changed is redrawn and what's new is added, message by message.
+async function reloadMessages() {
+  const v = S.view;
+  if (!chatOpen()) return;
+  const r = await api("GET", chatUrl(v));
+  if (S.view !== v) return;
+  const newest = Math.max(0, ...S.messages.map((m) => (typeof m.id === "number" ? m.id : 0)));
+  for (const m of r.messages) {
+    const i = S.messages.findIndex((x) => x.id === m.id);
+    if (i < 0) { if (m.id > newest) appendMessage(m); }
+    else if (JSON.stringify(S.messages[i]) !== JSON.stringify(m)) { S.messages[i] = m; redrawMessage(m); }
+  }
+}
+// The messages before the ones shown.
+async function loadOlder(btn) {
+  const v = S.view, first = S.messages.find((m) => typeof m.id === "number");
+  if (!first) return;
+  btn.disabled = true;
+  try {
+    const r = await api("GET", `${chatUrl(v)}?before=${first.id}`);
+    if (S.view !== v) return;
+    S.messages = [...r.messages, ...S.messages]; S.older = r.messages.length === PAGE;
+    renderMessages({ keepPlace: true });
+  } catch (e) { toast(e.message); btn.disabled = false; }
 }
 
 // On a wide screen, open the chat with the latest message (or Approvals); on a phone, show the list.
@@ -528,13 +725,24 @@ function renderHead() {
   const v = S.view; if (!v) return;
   const back = h("button", { class: "icon-btn back", "aria-label": "Back to chats", onclick: () => { $("#app").classList.remove("in-chat"); S.view = null; renderList(); } },
     h("span", { "aria-hidden": "true", style: "font-size:22px" }, "‹"));
+  head.append(sideToggle());
   if (v.kind === "agent") {
     const a = S.agents.find((x) => x.name === v.name); if (!a) return;
     const running = S.running.has(a.name);
-    head.append(...[back, avatar(a.name, "", running),
+    head.append(...[back, avatar(a.name, "", dotOf(a.name)),
       h("button", { class: "who", onclick: () => openDrawer(a.name), "aria-label": `${labelOf(a.name)} details` },
         h("div", { class: "title" }, labelOf(a.name)),
-        h("div", { class: "sub" }, running ? `Working: ${S.progress[a.name] || "thinking"}` : `${a.enabled ? cronText(a.schedule) : "Disabled"}, ${modelLabel(a.model)}, ${EFFORT_LABEL[a.effort].toLowerCase()} effort`))].filter(Boolean));
+        h("div", { class: "sub" }, S.waiting.has(a.name) ? "Waiting for your OK" : running ? `Working: ${S.progress[a.name] || "thinking"}` : `${a.enabled ? cronText(a.schedule) : "Disabled"}, ${modelLabel(a.model)}, ${EFFORT_LABEL[a.effort].toLowerCase()} effort`)),
+      a.browser ? browserButton(a.name) : null].filter(Boolean));
+  } else if (v.kind === "activity") {
+    const filter = h("select", { class: "activity-filter", "aria-label": "Show activity for", onchange: (e) => { S.activityAgent = e.target.value; renderActivity(); } },
+      h("option", { value: "" }, "All agents"), ...S.agents.map((a) => h("option", { value: a.name, selected: a.name === S.activityAgent }, labelOf(a.name))));
+    const mode = (m, label) => h("button", { class: `seg${S.activityMode === m ? " on" : ""}`, "aria-pressed": S.activityMode === m ? "true" : "false",
+      onclick: () => { if (S.activityMode === m && !S.runOpen) return; S.activityMode = m; S.runOpen = null; renderHead(); renderActivity(); } }, label);
+    filter.addEventListener("change", () => { S.runOpen = null; });
+    head.append(back, h("div", { class: "who" }, h("div", { class: "title" }, "Activity"),
+      h("div", { class: "sub" }, "Everything your agents did, newest first. Kept until you purge it.")),
+      h("div", { class: "segs", role: "group", "aria-label": "Show" }, mode("runs", "Interactions"), mode("entries", "Every entry")), filter);
   } else if (v.kind === "group") {
     const g = curGroup(); if (!g) return;
     const busy = g.members.filter((m) => S.running.has(m));
@@ -547,29 +755,26 @@ function renderHead() {
   }
 }
 
-function fillSettings() {
-  const a = S.agents.find((x) => x.name === S.view.name);
-  const option = (m) => h("option", { value: m, selected: m === a.model }, modelLabel(m));
-  // One group per provider; the agent's own model stays listed even if its provider isn't signed in.
-  $("#model").replaceChildren(...S.models.includes(a.model) ? [] : [option(a.model)],
-    ...S.modelGroups.map((g) => h("optgroup", { label: g.label }, ...g.models.map(option))));
-  $("#effort").replaceChildren(...Object.entries(S.efforts).map(([e, t]) => h("option", { value: e, selected: e === a.effort }, `${EFFORT_LABEL[e]} (${t} turns)`)));
-}
-
 // ---------------- chat ----------------
 function messageNode(m) {
   if (m.role === "system") return h("div", { class: "note" }, m.text);
   if (m.role === "local") return h("div", { class: "local" }, md(m.text), h("div", { class: "meta" }, "Only you can see this"));
   const mine = m.role === "human";
   const bubble = h("div", { class: `bubble${m.meta?.ok === false ? " failed" : ""}` });
-  if (m.meta?.task) bubble.append(h("div", { class: "task" }, m.meta.scheduled ? "Scheduled task" : "Task run"));
+  if (m.meta?.task) bubble.append(h("div", { class: "task" }, m.meta.webhook ? `Webhook “${m.meta.webhook}”`
+    : m.meta.taskFrom ? `Task #${m.meta.taskId} from ${labelOf(m.meta.taskFrom)}` : m.meta.tasks?.length ? "Delegated tasks came back"
+    : m.meta.scheduled ? "Scheduled task" : "Task run"));
   for (const a of m.attachments ?? []) bubble.append(h("a", { href: a.url, target: "_blank" }, h("img", { src: a.url, alt: "Attached photo", loading: "lazy" })));
   if (m.text) bubble.append(mine ? h("div", { class: "md" }, ...m.text.split("\n").flatMap((l, i) => i ? [h("br"), l] : [l])) : md(m.text));
+  const s = m.meta?.session; // 5-hour session limit after this run (Claude only; older messages have none)
+  const usage = s ? `${Math.round(s.used * 100)}% of session${s.resetsAt ? `, resets ${timeOf(s.resetsAt * 1000)}` : ""}`
+    : EFFORT_LABEL[m.meta?.effort]?.toLowerCase() ?? m.meta?.effort;
   const how = !mine && m.meta?.model
-    ? h("span", {}, `${modelLabel(m.meta.model)}, ${EFFORT_LABEL[m.meta.effort]?.toLowerCase() ?? m.meta.effort}${m.meta.turns ? `, ${m.meta.turns} turns` : ""}`) : null;
+    ? h("span", {}, `${modelLabel(m.meta.model)}, ${usage}${m.meta.turns ? `, ${m.meta.turns} turns` : ""}`) : null;
   bubble.append(h("div", { class: "meta" }, how, h("time", {}, timeOf(m.created_at))));
   const node = h("div", { class: `msg${mine ? " you" : ""}` }, mine ? null : avatar(m.author, "sm"), bubble);
-  return m.proposals?.length ? [node, ...m.proposals.map(proposalCard)] : node;
+  const cards = [...(m.proposals ?? []).map(proposalCard), ...(m.logins ?? []).map(loginCard), ...(m.actions ?? []).map(actionCard), ...(m.tasks ?? []).map(taskCard)];
+  return cards.length ? [node, ...cards] : node;
 }
 
 function withDays(items, dateKey, render) {
@@ -582,8 +787,14 @@ function withDays(items, dateKey, render) {
   return nodes;
 }
 
-function renderMessages() {
-  const stream = $("#stream");
+// A message's nodes (its bubble, then any cards under it), tagged so one message can be redrawn by itself.
+const nodesOf = (m) => [messageNode(m)].flat().map((n) => { n.dataset.mid = m.id; return n; });
+
+// The whole chat: when it opens, or earlier messages were loaded (keepPlace: stay where you were reading).
+// After that, messages are added or redrawn one at a time (appendMessage, redrawMessage), so an update
+// doesn't move what you're reading or clear what you're typing into a card.
+function renderMessages({ keepPlace = false } = {}) {
+  const stream = $("#stream"), sc = $("#scroll"), fromEnd = sc.scrollHeight - sc.scrollTop;
   if (!S.messages.length && S.view.kind === "group") {
     stream.replaceChildren(h("div", { class: "empty" }, h("h2", {}, "Say hi to the group"),
       h("p", {}, `Everyone here gets every message you send and answers in turn: ${curGroup()?.members.join(", ")}.`)));
@@ -591,8 +802,39 @@ function renderMessages() {
     const a = S.agents.find((x) => x.name === S.view.name);
     stream.replaceChildren(h("div", { class: "empty" }, h("h2", {}, `Say hi to ${labelOf(a.name)}`),
       h("p", {}, a.description || "Ask it anything within its job."), a.schedule ? h("p", {}, `It also runs by itself: ${cronText(a.schedule).toLowerCase()}. Results land here.`) : null));
-  } else stream.replaceChildren(...withDays(S.messages, "created_at", messageNode));
-  renderTyping(); scrollDown();
+  } else {
+    const older = S.older ? h("button", { class: "btn", style: "align-self:center;margin:4px 0 8px", onclick: (e) => loadOlder(e.target) }, "Show earlier messages") : null;
+    stream.replaceChildren(...[older, ...withDays(S.messages, "created_at", nodesOf)].filter(Boolean));
+  }
+  renderTyping();
+  if (keepPlace) sc.scrollTop = sc.scrollHeight - fromEnd; else scrollDown();
+}
+// A new message at the end. The view follows it only if you were at the bottom (or it's your own).
+function appendMessage(m) {
+  const follow = atBottom() || m.role === "human" || m.role === "local", prev = S.messages.at(-1);
+  S.messages.push(m);
+  if (!prev) return renderMessages(); // the first one replaces the "Say hi" text
+  const stream = $("#stream");
+  $("#typing")?.remove();
+  if (dayOf(prev.created_at) !== dayOf(m.created_at)) stream.append(h("div", { class: "day" }, dayOf(m.created_at)));
+  stream.append(...nodesOf(m));
+  renderTyping();
+  if (follow) scrollDown();
+}
+// One message again in place, e.g. a card under it changed.
+function redrawMessage(m) {
+  const old = [...$("#stream").children].filter((n) => n.dataset.mid === String(m.id));
+  if (!old.length) return;
+  old[0].before(...nodesOf(m));
+  for (const n of old) n.remove();
+}
+// A card under a reply was decided (approved, answered, saved): mark it and redraw the replies that carry it.
+function setCardStatus(kind, id, status) {
+  for (const m of S.messages) {
+    const hit = (m[kind] ?? []).filter((c) => c.id === id && c.status !== status);
+    for (const c of hit) c.status = status;
+    if (hit.length && chatOpen()) redrawMessage(m);
+  }
 }
 
 function renderTyping() {
@@ -606,6 +848,7 @@ function renderTyping() {
     who.map((n) => `${n} is ${S.progress[n] || "thinking"}`).join(", ")));
 }
 const scrollDown = () => { const s = $("#scroll"); s.scrollTop = s.scrollHeight; };
+const atBottom = () => { const s = $("#scroll"); return s.scrollHeight - s.scrollTop - s.clientHeight < 80; };
 
 async function send() {
   const text = $("#text").value.trim();
@@ -617,10 +860,8 @@ async function send() {
   try {
     if (v.kind === "agent") {
       await api("POST", `/api/chats/${v.name}/messages`, {
-        text, model: $("#model").value, effort: $("#effort").value, attachments: S.attachments.map((a) => a.path),
+        text, attachments: S.attachments.map((a) => a.path),
       });
-      const a = S.agents.find((x) => x.name === v.name);
-      a.model = $("#model").value; a.effort = $("#effort").value;
     } else if (v.kind === "group") {
       await api("POST", `/api/groups/${v.id}/messages`, { text });
     }
@@ -640,15 +881,15 @@ const COMMANDS = [
   { name: "approvals", desc: "Open the suggestions waiting for you" },
   { name: "new", desc: "Start a new conversation (the agent forgets this chat)", in: "agent" },
   { name: "run", desc: "Run the agent's scheduled task now", in: "agent" },
-  { name: "model", arg: "sonnet|gpt-6.1-sol|…", desc: "Switch the model for your next messages", in: "agent" },
-  { name: "effort", arg: "low…max", desc: "Switch the effort for your next messages", in: "agent" },
+  { name: "memory", desc: "See and change what it remembers between runs", in: "agent" },
+  { name: "browser", desc: "Watch its browser, or take over (agents with a browser)", in: "agent" },
 ];
 const commandsHere = () => COMMANDS.filter((c) => !c.in || c.in === S.view?.kind);
 
 // A note shown only in this browser, gone when you leave the chat.
+let localSeq = 0;
 function showLocal(text) {
-  const m = { role: "local", text, created_at: new Date().toISOString() };
-  S.messages.push(m); renderMessages();
+  appendMessage({ id: `local-${++localSeq}`, role: "local", text, created_at: new Date().toISOString() });
 }
 
 function helpText() {
@@ -659,6 +900,10 @@ function helpText() {
       "", "Tap the group name to add or remove agents. Type `/group` in the search box to create another group.");
   } else {
     out.push("", `# Talk to ${v.name}`, "Just type. You can also attach or paste photos.");
+  }
+  if (v.kind === "agent") {
+    out.push("", "Tap its name for what it can use, what it should ask you first about, its memory and its webhooks.",
+      "When it stops mid-task for your OK (or needs you in its browser), a card appears here and in Approvals, with a notification.");
   }
   out.push("", "To create an agent, use the button next to “Agents”. Type `/` in the search box for commands that work anywhere.",
     "", "To get a notification on this phone or computer when an agent finishes, tap the bell next to “Agents” (or type `/devices` in the search box).",
@@ -682,19 +927,18 @@ async function runCommand(text) {
     return;
   }
   const a = S.view.kind === "agent" ? S.agents.find((x) => x.name === S.view.name) : null;
-  if (cmd.name === "model" || cmd.name === "effort") {
-    const sel = $(`#${cmd.name}`), value = arg.trim().toLowerCase();
-    if (![...sel.options].some((o) => o.value === value)) return toast(`Use /${cmd.name} ${[...sel.options].map((o) => o.value).join(", ")}`);
-    sel.value = value;
-    toast(`${a.name} uses ${cmd.name === "model" ? modelLabel(value) : `${EFFORT_LABEL[value].toLowerCase()} effort`} from your next message`);
-  }
   if (cmd.name === "run" && !a.schedule) return toast(`${a.name} has no scheduled task. Just message it.`);
+  if (cmd.name === "browser" && !a.browser) return toast(`${labelOf(a.name)} has no browser.`);
   $("#text").value = ""; autosize(); updateSend();
   switch (cmd.name) {
     case "help": return showLocal(helpText());
     case "agents": return showLocal(agentsText());
     case "approvals": return open({ kind: "approvals" });
     case "run": return runNow();
+    case "memory":
+      await openDrawer(a.name);
+      return [...document.querySelectorAll(".drawer-body h4")].find((x) => x.textContent.startsWith("Memory"))?.scrollIntoView();
+    case "browser": return openBrowserView(a.name);
     case "new": try { await api("POST", `/api/agents/${a.name}/reset`); } catch (e) { toast(e.message); } return;
   }
 }
@@ -787,26 +1031,264 @@ async function decideInline(p, action, btn) {
     setProposalStatus(p.id, action === "approve" ? "approved" : "rejected"); loadState();
   } catch (e) { toast(e.message); btn.disabled = false; }
 }
-function setProposalStatus(id, status) {
-  let hit = false;
-  for (const m of S.messages) for (const p of m.proposals ?? []) if (p.id === id && p.status !== status) { p.status = status; hit = true; }
-  if (hit && (S.view?.kind === "agent" || S.view?.kind === "group")) renderMessages();
+function setProposalStatus(id, status) { setCardStatus("proposals", id, status); }
+
+// ---------------- an agent waiting mid-run for you ----------------
+// "tool": a tool set to ask first; "approval": it asked for your OK; "takeover": it needs you in its browser.
+const ACTION_DONE = { allowed: "✓ Allowed", denied: "Declined", expired: "No answer in time, so it didn't", done: "✓ Handed back" };
+function actionCard(r, { withAgent = false } = {}) {
+  if (r.tool === "LAN_KEY") return deviceKeyCard(r, { withAgent });
+  const who = labelOf(r.agent), open = r.status === "open";
+  const command = r.kind === "tool" && r.tool === "Shell"; // a terminal command: approved one by one, never "always"
+  const network = r.kind === "approval" && r.tool === "LAN"; // request_network_access: a device on your network
+  const privateData = r.kind === "approval" && r.tool === "PRIVATE"; // request_private_data: override rule zero, once
+  const title = r.kind === "takeover" ? `${who} needs you in its browser` : command ? `${who} wants to run a command` : network ? `${who} wants to reach a device on your network`
+    : privateData ? `${who} asks you to override rule zero (private data), for this one use`
+    : r.kind === "tool" ? `${who} wants to: ${r.title}` : `${who} asks for your OK`;
+  const note = open && r.kind !== "tool" ? h("input", { class: "field note-in", autocomplete: "off", placeholder: r.kind === "takeover" ? "Note for it (optional), e.g. what you did" : "Note for it (optional)" }) : null;
+  const act = (action) => async (e) => {
+    e.target.disabled = true;
+    try {
+      await api("POST", `/api/actions/${r.id}/${action}`, { note: note?.value ?? "" });
+      setActionStatus(r.id, action === "deny" ? "denied" : action === "done" ? "done" : "allowed");
+      if (network && action === "allow") toast(`${who} gets access in a moment. If it needs a key, it asks you here.`);
+      if (action === "always") toast(command ? `${who} runs exactly this command without asking from now on` : `${who} won't ask again for this`);
+      loadState(); if (S.view?.kind === "approvals") renderApprovals();
+    } catch (err) { toast(err.message); e.target.disabled = false; }
+  };
+  const buttons = command ? [h("button", { class: "btn danger", onclick: act("deny") }, "Deny"),
+      h("button", { class: "btn", onclick: act("always"), title: "Run it now, and let it run exactly this command again without asking (you can remove that in its details)" }, "Always allow this command"),
+      h("button", { class: "btn primary", onclick: act("allow") }, "Run it")]
+    : r.kind === "tool" ? [h("button", { class: "btn danger", onclick: act("deny") }, "Deny"),
+      h("button", { class: "btn", onclick: act("always"), title: "Don't ask again for this tool" }, "Always allow"), h("button", { class: "btn primary", onclick: act("allow") }, "Allow once")]
+    : r.kind === "takeover" ? [h("button", { class: "btn danger", onclick: act("deny") }, "Can't do it"),
+      h("button", { class: "btn", onclick: () => openBrowserView(r.agent, { action: r }) }, "Open its browser"), h("button", { class: "btn primary", onclick: act("done") }, "Done, hand it back")]
+    : network ? [h("button", { class: "btn danger", onclick: act("deny") }, "No"), h("button", { class: "btn primary", onclick: act("allow"), title: "Let this agent reach it (you can take it back in its details)" }, "Grant access")]
+    : privateData ? [h("button", { class: "btn primary", onclick: act("deny") }, "No, keep it private"),
+      h("button", { class: "btn danger", onclick: act("allow"), title: "Lets it use this private data for this purpose only, this once" }, "Override once")]
+    : [h("button", { class: "btn danger", onclick: act("deny") }, "No"), h("button", { class: "btn primary", onclick: act("allow") }, "Approve")];
+  return h("div", { class: `ask${open ? "" : " done"}`, style: withAgent ? "margin-left:0;width:100%" : null },
+    h("div", { class: "ask-title" }, title),
+    r.kind !== "tool" ? h("div", { class: "ask-line", style: "color:var(--ink)" }, r.title) : null,
+    r.details ? h("details", { open: open && (r.kind === "approval" || command) }, h("summary", {}, command ? "The exact command, and why" : r.kind === "tool" ? "Exactly what it will do" : "Details"), h("pre", { class: "details" }, r.details)) : null,
+    note,
+    open ? h("div", { class: "ask-line", style: "margin-top:8px" }, `It waits until ${timeOf(r.expiresAt)}; no answer by then is a no.` +
+      (r.kind === "takeover" ? " Do what it needs in its browser, then hand it back." : "")) : null,
+    h("div", { class: "actions" }, open ? buttons
+      : h("span", { class: `ask-status${r.status === "allowed" || r.status === "done" ? " approved" : ""}` }, ACTION_DONE[r.status] ?? r.status,
+        r.note ? `: “${r.note}”` : "")));
 }
+function setActionStatus(id, status) { setCardStatus("actions", id, status); }
+
+// request_device_key: the key of a device an agent can reach, given right here. The value goes straight to the LAN
+// gateway (encrypted there), never into the chat; the agent only learns that it's there.
+function deviceKeyCard(r, { withAgent = false } = {}) {
+  const who = labelOf(r.agent), open = r.status === "open";
+  let d = {};
+  try { d = JSON.parse(r.details ?? "{}"); } catch { /* an old request */ }
+  const ssh = d.kind === "ssh";
+  const title = ssh ? `${who} needs an SSH key for ${d.name ?? "a device"}` : `${who} needs the ${d.label ?? "key"} of ${d.name ?? "a device"}`;
+  const style = withAgent ? "margin-left:0;width:100%" : null;
+  if (!open) return h("div", { class: "ask done", style }, h("div", { class: "ask-title" }, title),
+    h("div", { class: "actions" }, h("span", { class: `ask-status${r.status === "allowed" ? " approved" : ""}` },
+      r.status === "allowed" ? "✓ Saved in the gateway" : ACTION_DONE[r.status] ?? r.status)));
+  const finish = async (btn, fn) => {
+    btn.disabled = true;
+    try {
+      if (fn) await fn();
+      await api("POST", `/api/actions/${r.id}/allow`, { note: "" });
+      setActionStatus(r.id, "allowed"); toast(`Saved. ${who} carries on in a moment.`); loadState();
+    } catch (e) { toast(e.message); btn.disabled = false; }
+  };
+  const deny = h("button", { class: "btn", onclick: async (e) => {
+    e.target.disabled = true;
+    try { await api("POST", `/api/actions/${r.id}/deny`, { note: "" }); setActionStatus(r.id, "denied"); }
+    catch (err) { toast(err.message); e.target.disabled = false; }
+  } }, "Not now");
+  const head = [h("div", { class: "ask-title" }, title),
+    h("div", { class: "ask-line" }, h("code", {}, d.address ?? ""), d.why ? ` · ${d.why}` : "")];
+  const foot = h("div", { class: "ask-line", style: "margin-top:8px" },
+    `Goes straight to the network gateway, encrypted. ${who} never sees it. It waits until ${timeOf(r.expiresAt)}.`);
+  if (!ssh) {
+    const value = h("input", { class: "field", type: "password", autocomplete: "off", placeholder: d.label ?? "Key",
+      onkeydown: (e) => { if (e.key === "Enter") save.click(); } });
+    const save = h("button", { class: "btn primary", onclick: () => value.value && finish(save,
+      () => api("PUT", `/api/lan/targets/${d.target}/credential`, { value: value.value, header: d.header, format: d.format })) }, "Save");
+    return h("div", { class: "ask", style }, ...head, value,
+      h("div", { class: "by", style: "margin-top:4px" }, `Sent as ${d.header}: ${String(d.format ?? "{}").replace("{base64}", "{} (base64)").replace("{}", "…")}`),
+      foot, h("div", { class: "actions" }, deny, save));
+  }
+  // SSH: the gateway makes a key (or takes yours); you add its public half to the device, then hand it back.
+  const user = h("input", { class: "field", maxlength: "32", autocomplete: "off", spellcheck: "false", placeholder: "User on the device, e.g. admin", value: d.user ?? "" });
+  const pub = h("div", { hidden: true });
+  const done = h("button", { class: "btn primary", hidden: true, onclick: () => finish(done) }, "Done, I added it");
+  const showKey = (t) => {
+    pub.replaceChildren(h("div", { class: "by" }, `Add this public key to ${d.name}'s authorized keys (user ${t.ssh.user}):`),
+      h("div", { class: "hook-url" }, h("code", { style: "overflow-wrap:anywhere" }, t.ssh.publicKey),
+        h("button", { class: "btn sm", onclick: () => navigator.clipboard?.writeText(t.ssh.publicKey).then(() => toast("Copied"), () => toast("Select it and copy it")) }, "Copy")));
+    pub.hidden = false; done.hidden = false; make.textContent = "Make a new key";
+  };
+  const make = h("button", { class: "btn", onclick: async () => {
+    make.disabled = true;
+    try { showKey((await api("PUT", `/api/lan/targets/${d.target}/ssh`, { user: user.value.trim(), generate: true })).target); }
+    catch (e) { toast(e.message); }
+    make.disabled = false;
+  } }, "Make a key");
+  const own = h("textarea", { class: "field", rows: "4", spellcheck: "false", autocomplete: "off", style: "font:12px/1.4 var(--font-code);width:100%",
+    placeholder: "-----BEGIN OPENSSH PRIVATE KEY-----\n…\n-----END OPENSSH PRIVATE KEY-----" });
+  const useOwn = h("button", { class: "btn sm", onclick: () => own.value.trim() && finish(useOwn,
+    () => api("PUT", `/api/lan/targets/${d.target}/ssh`, { user: user.value.trim(), key: own.value })) }, "Use this key");
+  return h("div", { class: "ask", style }, ...head, user, pub,
+    h("details", {}, h("summary", { class: "by", style: "cursor:pointer" }, "Or use a key of your own (no passphrase)"),
+      h("div", { style: "display:grid;gap:8px;margin-top:6px" }, own, h("div", { style: "display:flex;justify-content:flex-end" }, useOwn))),
+    foot, h("div", { class: "actions" }, deny, make, done));
+}
+
+// A task this agent delegated to another (it runs in the background; the result shows here when it's done).
+const TASK_STATUS = { queued: "Waiting its turn", running: "Working on it…", done: "✓ Done", failed: "Couldn't finish" };
+function taskCard(t) {
+  const ended = t.status === "done" || t.status === "failed";
+  return h("div", { class: `ask task${ended ? " done" : ""}` },
+    h("div", { class: "ask-title" }, `Task #${t.id} for ${labelOf(t.to)}`),
+    h("div", { class: "ask-line" }, t.text.length > 240 ? `${t.text.slice(0, 239)}…` : t.text),
+    t.result ? h("details", {}, h("summary", {}, "Result"), md(t.result)) : null,
+    h("div", { class: "actions" },
+      h("span", { class: `ask-status${t.status === "done" ? " approved" : ended ? "" : " working"}` }, TASK_STATUS[t.status] ?? t.status),
+      h("button", { class: "btn sm", onclick: () => open({ kind: "agent", name: t.to }) }, `Open ${labelOf(t.to)}`)));
+}
+
+// ---------------- site logins (the vault) ----------------
+// Values go from these fields straight to the vault container; agents only ever see the names.
+const hostOf = (site) => { try { return new URL(site).host; } catch { return site; } };
+// Same matching as the browser: an origin, a host, or *.host for its subdomains.
+const siteAllowed = (origin) => {
+  const host = hostOf(origin);
+  return S.logins.sites.some(({ rule: r }) => r === origin || r === host || (r.startsWith("*.") && host.endsWith(r.slice(1))));
+};
+async function loadLogins() {
+  try { S.logins = await api("GET", "/api/logins"); } catch { /* signed out */ }
+}
+
+function loginCard(r) {
+  const title = `${labelOf(r.agent)} needs your ${hostOf(r.site)} login`;
+  if (r.status !== "open") return h("div", { class: "ask done" }, h("div", { class: "ask-title" }, title),
+    h("div", { class: "actions" }, h("span", { class: `ask-status${r.status === "saved" ? " approved" : ""}` }, r.status === "saved" ? "✓ Saved in the vault" : "Not now")));
+  const saved = new Set(S.logins.logins.map((l) => l.name));
+  const inputs = r.fields.map((f) => h("input", { class: "field", type: f.secret ? "password" : "text", autocomplete: "off", spellcheck: "false", autocapitalize: "off",
+    placeholder: saved.has(f.name) ? "Saved: leave empty to use the saved one" : "", onkeydown: (e) => { if (e.key === "Enter") save.click(); } }));
+  const isDevice = /^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(hostOf(r.site)); // a device: its browser already opens it (granted in the chat)
+  const allow = S.logins.available && !isDevice && !siteAllowed(r.site) ? h("input", { type: "checkbox", checked: true }) : null;
+  const save = h("button", { class: "btn primary", onclick: async () => {
+    save.disabled = true;
+    try {
+      const values = Object.fromEntries(r.fields.map((f, i) => [f.name, inputs[i].value]));
+      await api("POST", `/api/login-requests/${r.id}/save`, { values, allowSite: !!allow?.checked });
+      inputs.forEach((i) => { i.value = ""; });
+      toast(`Saved. ${labelOf(r.agent)} carries on in a moment.`);
+      setLoginStatus(r.id, "saved"); loadLogins();
+    } catch (e) { toast(e.message); save.disabled = false; }
+  } }, "Save");
+  const dismiss = async (btn) => {
+    btn.disabled = true;
+    try { await api("POST", `/api/login-requests/${r.id}/dismiss`); setLoginStatus(r.id, "dismissed"); }
+    catch (e) { toast(e.message); btn.disabled = false; }
+  };
+  return h("div", { class: "ask" },
+    h("div", { class: "ask-title" }, title),
+    r.reason ? h("div", { class: "ask-line" }, r.reason) : null,
+    S.logins.available ? null : h("div", { class: "ask-line", style: "color:var(--danger)" }, S.logins.error || "The vault isn't running."),
+    ...r.fields.map((f, i) => h("label", { class: "lf" }, h("span", {}, f.label, " ", h("code", {}, f.name)), inputs[i])),
+    allow ? h("label", { class: "lf-allow" }, allow, `Let the browser open ${r.site}`) : null,
+    h("div", { class: "ask-line", style: "margin-top:8px" }, `Goes straight to the vault, encrypted. Only ${labelOf(r.agent)} may use it, and it only sees the names. You can let other agents use it under the key icon.`),
+    h("div", { class: "actions" },
+      h("button", { class: "btn", onclick: (e) => dismiss(e.target) }, "Not now"), save));
+}
+function setLoginStatus(id, status) { setCardStatus("logins", id, status); }
+
+const loginsOpen = () => !!$('#drawer-root .drawer[aria-label="Site logins"]');
+async function openLoginsDrawer() {
+  await loadLogins();
+  const v = S.logins, rerender = () => openLoginsDrawer();
+  // Which agents may use a login: one tick per agent that has a browser with logins.
+  const grantBoxes = (checked, onchange) => (v.agents ?? []).map((a) => h("label", {},
+    h("input", { type: "checkbox", value: a, checked: checked.includes(a), onchange }), labelOf(a)));
+  const act = async (fn, done) => { try { await fn(); if (done) toast(done); await rerender(); } catch (e) { toast(e.message); } };
+  const loginRow = (l) => {
+    const value = h("input", { class: "field", type: "password", autocomplete: "off", placeholder: `New value for ${l.name}`,
+      onkeydown: (e) => { if (e.key === "Enter") put.click(); } });
+    const put = h("button", { class: "btn primary", onclick: () => value.value && act(() => api("PUT", `/api/logins/${l.name}`, { value: value.value }), `${l.name} replaced`) }, "Save");
+    const replace = h("div", { class: "replace", hidden: true }, value, put);
+    return h("div", { class: "login-row" },
+      h("code", { style: "font-size:13.5px;color:var(--ink)" }, l.name),
+      h("div", { class: "row-actions" },
+        h("button", { class: "btn", onclick: () => { replace.hidden = !replace.hidden; if (!replace.hidden) value.focus(); } }, "Replace"),
+        l.source === "vault" ? h("button", { class: "btn danger", onclick: () => confirm(`Delete ${l.name} from the vault?`) && act(() => api("DELETE", `/api/logins/${l.name}`), `${l.name} deleted`) }, "Delete") : null),
+      h("div", { class: "desc" }, [l.site && hostOf(l.site), l.source === "stack" ? "from BROWSER_SECRETS in the stack's variables" : l.updatedAt && `saved ${whenOf(l.updatedAt)}`].filter(Boolean).join(" · ")),
+      h("div", { class: "grants" }, (v.agents ?? []).length ? ["Can use it:", ...grantBoxes(l.agents ?? [], (e) => {
+        const agents = [...e.target.closest(".grants").querySelectorAll("input:checked")].map((b) => b.value);
+        act(() => api("POST", `/api/logins/${l.name}/agents`, { agents }), agents.length ? `${l.name}: ${agents.map(labelOf).join(", ")}` : `No agent can use ${l.name}`);
+      })] : "No agent has the browser yet"),
+      replace);
+  };
+  const name = h("input", { class: "field", maxlength: "64", autocomplete: "off", spellcheck: "false", placeholder: "e.g. VINTED_PASSWORD",
+    oninput: (e) => { const x = e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_"); if (x !== e.target.value) e.target.value = x; } });
+  const value = h("input", { class: "field", type: "password", autocomplete: "off", placeholder: "Value" });
+  const site = h("input", { class: "field", autocomplete: "off", spellcheck: "false", placeholder: "Site (optional), e.g. https://www.vinted.pt or http://192.168.1.1:8443" });
+  const newGrants = h("div", { class: "grants" }, (v.agents ?? []).length ? ["Can use it:", ...grantBoxes([], null)] : null);
+  const newSite = h("input", { class: "field", autocomplete: "off", spellcheck: "false", placeholder: "https://www.vinted.pt, vinted.pt, *.vinted.net or 192.168.1.1:8443",
+    onkeydown: (e) => { if (e.key === "Enter") addSite.click(); } });
+  const newSiteNote = h("input", { class: "field", maxlength: "200", autocomplete: "off", placeholder: "What it's for (optional), e.g. Selling on Vinted",
+    onkeydown: (e) => { if (e.key === "Enter") addSite.click(); } });
+  const addSite = h("button", { class: "btn", onclick: async () => {
+    if (!newSite.value.trim()) return;
+    try {
+      const r = await api("POST", "/api/logins/sites", { add: newSite.value.trim(), note: newSiteNote.value.trim() });
+      toast("Site added"); await loadLogins(); rerender();
+    } catch (e) { toast(e.message); }
+  } }, "Add");
+  showDrawer({ label: "Site logins", title: h("div", { class: "drawer-title" }, "Site logins"), focus: v.available ? name : undefined, body: [
+    h("p", { style: "margin:0;color:var(--muted)" }, "Logins for the browser agent. What you type here goes straight to the vault, encrypted, in its own container. " +
+      "Agents only see the names (e.g. OLX_PASSWORD): they type a name into a sign-in form and the browser fills in the value. Each login works only for the agents you tick. When an agent needs a login it doesn't have, it asks you under its reply."),
+    !v.available ? h("div", { class: "card" }, h("h3", {}, "The vault isn't running"), h("p", { style: "margin:0" }, v.error || ""),
+      h("p", { class: "field-hint" }, "Set COMPOSE_PROFILES=browser in the stack's variables (or .env) and redeploy (docker compose up -d).")) : [
+      h("div", {}, h("h4", {}, "Saved logins"), v.logins.length ? h("div", {}, ...v.logins.map(loginRow)) : h("p", { style: "margin:0;color:var(--muted)" }, "None yet.")),
+      h("div", {}, h("h4", {}, "Add a login"), h("div", { style: "display:grid;gap:8px" }, name, value, site, newGrants,
+        h("div", { style: "display:flex;justify-content:flex-end" }, h("button", { class: "btn primary", onclick: () => act(async () => {
+          if (!name.value || !value.value) throw new Error("Type a name and a value");
+          const agents = [...newGrants.querySelectorAll("input:checked")].map((b) => b.value);
+          await api("PUT", `/api/logins/${name.value}`, { value: value.value, site: site.value, agents });
+        }, `${name.value} saved`) }, "Save")))),
+      h("div", {}, h("h4", {}, "Sites the browser can open"), h("div", {}, ...v.sites.map((st) => h("span", { class: "chip site",
+          title: [st.note, st.source === "stack" ? "From BROWSER_ALLOWED_ORIGINS in the stack's variables" : null].filter(Boolean).join("\n") || null },
+          st.rule, st.note ? h("span", { style: "color:var(--muted);margin-left:6px" }, `· ${st.note}`) : null,
+          st.source === "vault" ? h("button", { "aria-label": `Remove ${st.rule}`, title: "Remove",
+            onclick: () => confirm(`Stop the browser opening ${st.rule}?`) && act(() => api("POST", "/api/logins/sites", { remove: st.rule }), "Site removed") }, "✕") : null))),
+        h("div", { style: "display:flex;gap:8px;margin-top:8px;flex-wrap:wrap" }, newSite, newSiteNote, addSite),
+        h("p", { class: "field-hint" }, "The browser opens pages only on these sites. Their pages load images, scripts and sign-in frames from anywhere, never from your network. Changes restart the browser. " +
+          "For a device on your network (an IP and port), ask the agent in its chat: it asks you for access there. " +
+          "Describe or change what a site is for in an agent's details.")),
+    ],
+  ] });
+}
+$("#logins-btn").addEventListener("click", () => openLoginsDrawer());
+
 
 // ---------------- approvals ----------------
 const TOOL_LABEL = { Read: "Read files", Write: "Write files", Edit: "Edit files", Glob: "Find files", Grep: "Search files", WebSearch: "Web search", WebFetch: "Open web pages", Bash: "Shell commands", mcp__agents: "Manage agents" };
 const toolLabel = (t) => TOOL_LABEL[t] ?? (t.startsWith("mcp__") ? `${t.slice(5)} (connector)` : t);
 
 async function renderApprovals() {
-  const { proposals } = await api("GET", "/api/proposals");
+  const [{ proposals }, { actions }] = await Promise.all([api("GET", "/api/proposals"), api("GET", "/api/actions")]);
   if (S.view?.kind !== "approvals") return;
   const stream = $("#stream");
-  if (!proposals.length) {
+  if (!proposals.length && !actions.length) {
     stream.replaceChildren(h("div", { class: "empty" }, h("h2", {}, "You're all caught up"),
-      h("p", {}, "When an agent suggests a new agent or a change, it waits here for you.")));
+      h("p", {}, "When an agent suggests a new agent or a change, or stops to ask for your OK, it waits here for you.")));
     return;
   }
-  stream.replaceChildren(h("div", { class: "cards" }, ...proposals.map((p) => {
+  const waiting = actions.length ? [h("h4", { style: "margin:0;color:var(--muted)" }, "Waiting for you right now"),
+    ...actions.map((r) => actionCard(r, { withAgent: true })), proposals.length ? h("h4", { style: "margin:8px 0 0;color:var(--muted)" }, "Suggestions") : null] : [];
+  stream.replaceChildren(h("div", { class: "cards" }, ...waiting, ...proposals.map((p) => {
     const c = p.config, cur = p.current, isNew = p.kind === "create";
     const changed = Object.keys(p.diff);
     const tools = c.tools.map((t) => h("span", { class: `chip${cur && !cur.tools.includes(t) ? " new" : ""}` }, toolLabel(t)));
@@ -831,30 +1313,490 @@ async function decide(id, action, btn) {
   catch (e) { toast(e.message); btn.disabled = false; }
 }
 
+// ---------------- activity: the log of everything agents did ----------------
+// Each run's request, every tool call (commands, files, pages) with its result, what the agent said and thought,
+// and every change and approval. Entries are only ever added; Purge (yours only, with your password) removes them.
+const EVENT_KIND = (a) => a === "run" ? "run" : /^(action-|propose-|approve|reject)/.test(a) ? "ask" : /^memory-/.test(a) ? "mem"
+  : /^trigger-/.test(a) ? "hook" : /^(task-|ask$|reply$)/.test(a) ? "task" : /^(login-|site-|browser-|device-|log-)/.test(a) ? "key" : "change";
+const LOG_FILTERS = [["", "Everything"], ["tool,result,refused", "Commands and tools"], ["say,think", "What they said and thought"], ["start,end", "Runs"], ["event", "Changes and approvals"]];
+const LOG_TAG = { start: "asked", say: "said", think: "thought", tool: "did", result: "result", refused: "refused", end: "ended" };
+const logDot = (e) => e.kind === "event" ? EVENT_KIND(e.tool ?? "") : e.kind === "tool" ? "tool" : e.kind === "think" ? "think"
+  : e.kind === "refused" || e.ok === 0 ? "bad" : e.kind === "result" || e.kind === "end" || e.kind === "start" ? "good" : "say";
+const forActivity = (e) => S.activityMode === "entries" && (!S.activityAgent || e.agent === S.activityAgent || e.actor === S.activityAgent || (e.actor ?? "").startsWith(`${S.activityAgent} (`))
+  && (!S.activityKinds || S.activityKinds.split(",").includes(e.kind)) && (S.activityRun == null || e.run === S.activityRun) && !S.activityQ;
+async function renderActivity(more = false) {
+  if (S.activityMode === "runs") return S.runOpen != null ? renderInteraction(S.runOpen) : renderRuns(more);
+  return renderEntries(more);
+}
+async function renderEntries(more = false) {
+  const q = new URLSearchParams();
+  if (more && S.activity.length) q.set("before", S.activity.at(-1).id);
+  if (S.activityAgent) q.set("agent", S.activityAgent);
+  if (S.activityKinds) q.set("kinds", S.activityKinds);
+  if (S.activityRun != null) q.set("run", S.activityRun);
+  if (S.activityQ) q.set("q", S.activityQ);
+  try {
+    const { entries } = await api("GET", `/api/log?${q}`);
+    if (S.view?.kind !== "activity" || S.activityMode !== "entries") return;
+    S.activity = more ? [...S.activity, ...entries] : entries;
+    S.activityMore = entries.length === 80;
+    drawActivity();
+    if (!more) $("#scroll").scrollTop = 0;
+  } catch (e) { toast(e.message); }
+}
+let actBar = null, actTimer = null;
+function activityBar() {
+  if (actBar) return actBar;
+  const find = h("input", { class: "field", type: "search", placeholder: "Find a command, file, page or word", "aria-label": "Find in the log", value: S.activityQ,
+    oninput: (e) => { clearTimeout(actTimer); actTimer = setTimeout(() => { S.activityQ = e.target.value.trim(); renderActivity(); }, 300); } });
+  const kinds = h("select", { class: "activity-filter", "aria-label": "Show", onchange: (e) => { S.activityKinds = e.target.value; renderActivity(); } },
+    ...LOG_FILTERS.map(([v, label]) => h("option", { value: v, selected: v === S.activityKinds }, label)));
+  const run = h("button", { class: "btn sm", id: "act-run", hidden: true, onclick: () => { S.activityRun = null; renderActivity(); } });
+  return (actBar = h("div", { class: "act-bar" }, find, kinds, run, h("button", { class: "btn danger", onclick: openPurgeDrawer }, "Purge…")));
+}
+async function toggleEntry(e) {
+  if (S.activityOpen.has(e.id)) S.activityOpen.delete(e.id);
+  else {
+    try { S.activityOpen.set(e.id, e.more ? ((await api("GET", `/api/log/${e.id}`)).entry.detail ?? e.text) : e.text); }
+    catch (err) { return toast(err.message); }
+  }
+  drawActivity();
+}
+function entryNode(e) {
+  const open = S.activityOpen.get(e.id);
+  const canOpen = e.more || e.text.length > 160;
+  const who = e.kind !== "event" && !S.activityAgent && e.agent ? h("b", {}, labelOf(e.agent), " ") : null;
+  const txt = h("span", { class: "txt" },
+    h("div", { class: open == null ? "line" : "" }, who, LOG_TAG[e.kind] ? h("span", { class: "tag" }, LOG_TAG[e.kind]) : null, e.text,
+      e.run && S.activityRun == null ? h("button", { class: "run", title: "Show only this run", onclick: (ev) => { ev.stopPropagation(); S.activityRun = e.run; renderActivity(); } }, `run ${e.run}`) : null),
+    open != null && open !== e.text ? h("pre", { onclick: (ev) => ev.stopPropagation() }, open) : null);
+  return h("div", { class: `ev k-${logDot(e)}${e.kind === "result" ? " sub" : ""}${canOpen ? " open-able" : ""}`, ...(canOpen ? { onclick: () => toggleEntry(e), title: open == null ? "Show all of it" : "Show less" } : {}) },
+    h("time", { datetime: e.at }, timeOf(e.at)), h("i", { "aria-hidden": "true" }), txt);
+}
+function drawActivity() {
+  const stream = $("#stream"), bar = activityBar();
+  const run = $("#act-run", bar);
+  run.hidden = S.activityRun == null; run.textContent = S.activityRun == null ? "" : `Run ${S.activityRun} ✕`;
+  const filtered = S.activityAgent || S.activityKinds || S.activityQ || S.activityRun != null;
+  const body = S.activity.length
+    ? [...withDays(S.activity, "at", entryNode),
+      S.activityMore ? h("button", { class: "btn", style: "align-self:center;margin:12px", onclick: (ev) => { ev.target.disabled = true; renderActivity(true); } }, "Show older") : null]
+    : [h("div", { class: "empty" }, h("h2", {}, filtered ? "Nothing matches" : "Nothing yet"),
+      h("p", {}, filtered ? "Try another agent, kind or word." : "What your agents are asked, every command and tool they use, what they say, and every change and approval show here as they happen."))];
+  if (bar.parentNode && bar.parentNode.parentNode === stream) { while (bar.nextSibling) bar.nextSibling.remove(); bar.after(...body.filter(Boolean)); } // keeps what you're typing in the search
+  else stream.replaceChildren(h("div", { class: "activity" }, bar, ...body));
+}
+
+// ---------------- interactions: each run start to finish ----------------
+// One card per run: who started it, what it was asked, how it ended and what it did. Open one to read every step:
+// each thought, each tool call with its full input and output, what it said, each approval, task and change, the result.
+const triggerText = (t, from) => t === "chat" ? "You, in its chat" : t === "manual" ? "You, with Run now" : t === "schedule" ? "Its schedule"
+  : t === "ask:human" ? "You, from the command line" : t === "login" ? "You saved a login it asked for" : t === "tasks" ? "Results of tasks it handed out"
+  : /^group:\d+$/.test(t) ? `You, in the group ${S.groups.find((g) => `group:${g.id}` === t)?.name ?? `#${t.slice(6)}`}`
+  : t.startsWith("webhook:") ? `Webhook “${t.slice(8)}”` : t.startsWith("task:") ? `Task #${t.slice(5)} from ${from ? labelOf(from) : "another agent"}`
+  : t.startsWith("agent:") ? `${labelOf(t.slice(6))} asked it` : t;
+const durOf = (a, b) => {
+  const s = Math.max(0, Math.round(((b ? new Date(b) : new Date()) - new Date(a)) / 1000));
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+};
+const fullTime = (iso) => new Date(iso).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const STATUS_TEXT = { ok: "Finished", error: "Error", interrupted: "Interrupted", error_max_turns: "Hit its turn limit", error_during_execution: "Error" };
+function runStatus(r) {
+  if (!r.endedAt) return ["live", "Running"];
+  if (r.status !== "ok") return ["bad", STATUS_TEXT[r.status] ?? r.status ?? "Ended"];
+  return r.failed || r.refused ? ["warn", "Finished, with problems"] : ["good", "Finished"];
+}
+const pill = ([cls, text]) => h("span", { class: `pill ${cls}` }, text);
+const countsOf = (r) => [
+  h("span", {}, `${r.tools} tool call${r.tools === 1 ? "" : "s"}`),
+  r.failed ? h("span", { class: "bad-t" }, `${r.failed} failed`) : null,
+  r.refused ? h("span", { class: "bad-t" }, `${r.refused} refused`) : null,
+];
+let runsBar = null, runsTimer = null;
+function interactionsBar() {
+  if (runsBar) return runsBar;
+  const find = h("input", { class: "field", type: "search", placeholder: "Find a request, command, file, page or word", "aria-label": "Find an interaction", value: S.runQ,
+    oninput: (e) => { clearTimeout(runsTimer); runsTimer = setTimeout(() => { S.runQ = e.target.value.trim(); renderRuns(); }, 300); } });
+  const status = h("select", { class: "activity-filter", "aria-label": "Outcome", onchange: (e) => { S.runStatus = e.target.value; renderRuns(); } },
+    ...[["", "Any outcome"], ["running", "Running now"], ["ok", "Finished fine"], ["problem", "Errors, failures or refusals"]]
+      .map(([v, label]) => h("option", { value: v, selected: v === S.runStatus }, label)));
+  return (runsBar = h("div", { class: "act-bar" }, find, status, h("button", { class: "btn danger", onclick: openPurgeDrawer }, "Purge…")));
+}
+async function renderRuns(more = false) {
+  const q = new URLSearchParams();
+  if (more && S.runs.length) q.set("before", S.runs.at(-1).id);
+  if (S.activityAgent) q.set("agent", S.activityAgent);
+  if (S.runStatus) q.set("status", S.runStatus);
+  if (S.runQ) q.set("q", S.runQ);
+  try {
+    const { runs } = await api("GET", `/api/interactions?${q}`);
+    if (S.view?.kind !== "activity" || S.activityMode !== "runs" || S.runOpen != null) return;
+    S.runs = more ? [...S.runs, ...runs] : runs;
+    S.runsMore = runs.length === 40;
+    drawRuns();
+  } catch (e) { toast(e.message); }
+}
+function runCard(r) {
+  const req = (r.request ?? "").trim();
+  return h("button", { class: `irow k-${runStatus(r)[0]}`, onclick: () => openInteraction(r.id) },
+    avatar(r.agent),
+    h("div", { class: "imain" },
+      h("div", { class: "itop" }, h("b", {}, labelOf(r.agent)), h("span", { class: "trig" }, triggerText(r.trigger, r.taskFrom)),
+        h("time", { datetime: r.startedAt, title: fullTime(r.startedAt) }, timeOf(r.startedAt))),
+      req ? h("div", { class: "ireq" }, req) : h("div", { class: "ireq muted" }, "No request recorded (the log may have been purged)"),
+      r.result ? h("div", { class: "ires" }, h("span", { "aria-hidden": "true" }, "→ "), r.result) : null,
+      h("div", { class: "imeta" }, pill(runStatus(r)), h("span", {}, durOf(r.startedAt, r.endedAt)), ...countsOf(r), h("span", { class: "rid" }, `#${r.id}`))));
+}
+function drawRuns() {
+  const stream = $("#stream"), bar = interactionsBar();
+  const filtered = S.activityAgent || S.runStatus || S.runQ;
+  const body = S.runs.length
+    ? [...withDays(S.runs, "startedAt", runCard),
+      S.runsMore ? h("button", { class: "btn", style: "align-self:center;margin:12px", onclick: (ev) => { ev.target.disabled = true; renderRuns(true); } }, "Show older") : null]
+    : [h("div", { class: "empty" }, h("h2", {}, filtered ? "Nothing matches" : "No interactions yet"),
+      h("p", {}, filtered ? "Try another agent, outcome or word." : "Each time an agent is asked something, runs on its schedule or gets a task, it shows here. Open one to see every step."))];
+  if (bar.parentNode && bar.parentNode.parentNode === stream) { while (bar.nextSibling) bar.nextSibling.remove(); bar.after(...body.filter(Boolean)); }
+  else stream.replaceChildren(h("div", { class: "activity" }, bar, ...body));
+}
+function openInteraction(id) {
+  S.activityMode = "runs"; S.runOpen = id; S.runData = null;
+  if (S.view?.kind !== "activity") return open({ kind: "activity" });
+  renderHead(); renderInteraction(id);
+}
+async function renderInteraction(id, { keepScroll = false } = {}) {
+  try {
+    const data = await api("GET", `/api/interactions/${id}`);
+    if (S.view?.kind !== "activity" || S.runOpen !== id) return;
+    const scroll = $("#scroll"), top = scroll.scrollTop;
+    S.runData = data;
+    drawInteraction(data);
+    scroll.scrollTop = keepScroll ? top : 0;
+  } catch (e) { toast(e.message); if (S.runOpen === id) { S.runOpen = null; renderActivity(); } }
+}
+// What a tool call did, in words.
+const ACTION_LABEL = { Bash: "Ran a command", Shell: "Ran a command", Read: "Read a file", Write: "Wrote a file", Edit: "Edited a file", MultiEdit: "Edited a file",
+  NotebookEdit: "Edited a notebook", Glob: "Looked for files", Grep: "Searched in files", WebSearch: "Searched the web", WebFetch: "Opened a web page", TodoWrite: "Updated its to-do list" };
+const actionLabel = (t) => {
+  if (!t) return "Used a tool";
+  if (ACTION_LABEL[t]) return ACTION_LABEL[t];
+  const m = t.match(/^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/);
+  if (m) return `${m[2].replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())} · ${m[1] === "self" ? "itself" : m[1] === "agents" ? "agents" : `${m[1]} connector`}`;
+  return t;
+};
+// A tool's input: the command or the fields, one per line, rather than raw JSON when it's simple.
+function inputNode(detail) {
+  if (detail == null || detail === "") return h("p", { class: "none" }, "No input");
+  let v = detail;
+  try { v = JSON.parse(detail); } catch { return h("pre", {}, detail); }
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    const keys = Object.keys(v);
+    if (keys.length === 1 && typeof v[keys[0]] === "string") return h("div", {}, h("div", { class: "k" }, keys[0]), h("pre", {}, v[keys[0]]));
+    if (keys.every((k) => typeof v[k] !== "object" || v[k] === null)) return h("dl", { class: "kv" },
+      ...keys.flatMap((k) => [h("dt", {}, k), h("dd", {}, h("pre", {}, String(v[k])))]));
+  }
+  return h("pre", {}, typeof v === "string" ? v : JSON.stringify(v, null, 2));
+}
+const linesOf = (s) => (s ? s.split("\n").length : 0);
+const block = (label, body, { open = true, note = "" } = {}) =>
+  h("details", { class: "blk", open }, h("summary", {}, label, note ? h("span", { class: "note" }, note) : null), body);
+// Every entry of the run in order, each tool call with its result (results come back in the order the calls were made).
+function stepsOf(data) {
+  const items = [...data.entries.filter((e) => e.kind !== "start" && e.kind !== "end"), ...data.events].sort((a, b) => a.id - b.id);
+  const steps = [], waiting = [];
+  const cmdStep = () => [...waiting].reverse().find((s) => /run_command$/.test(s.e.tool ?? ""));
+  for (const e of items) {
+    // A command it asked to run: your answer and the sandbox's record of running it belong to that call.
+    if (e.kind === "event" && /^(action-|command-rule)/.test(e.tool ?? "") && waiting.length) { (waiting.at(-1).approvals ??= []).push(e); continue; }
+    if ((e.kind === "result" || e.kind === "refused") && e.tool === "Shell" && cmdStep()) { cmdStep().exec = e; continue; }
+    if (e.kind === "result") {
+      const i = waiting.findIndex((s) => !e.tool || s.e.tool === e.tool);
+      if (i >= 0) { waiting.splice(i, 1)[0].result = e; continue; }
+    }
+    if (e.kind === "refused") {
+      const s = steps.find((s) => s.kind === "tool" && s.e.tool === e.tool && !s.refused && (s.e.detail ?? "") === (e.detail ?? ""));
+      if (s) { s.refused = e; continue; }
+    }
+    const s = { kind: e.kind, e };
+    if (e.kind === "tool") waiting.push(s);
+    steps.push(s);
+  }
+  return steps;
+}
+const whoActed = (actor) => !actor ? "" : /^human/.test(actor) ? "You" : actor === "system" ? "System" : labelOf(actor.replace(/ \(.*$/, ""));
+function stepNode(s, n, data) {
+  const e = s.e, at = h("time", { datetime: e.at, title: fullTime(e.at) }, new Date(e.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+  if (s.kind === "think") return h("div", { class: "step think" }, h("div", { class: "shead" }, h("span", { class: "sk" }, "Thought"), at),
+    block("What it was thinking", h("pre", { class: "prose" }, e.detail ?? e.text), { open: false, note: `${linesOf(e.detail ?? e.text)} lines` }));
+  if (s.kind === "say") return h("div", { class: "step say" }, h("div", { class: "shead" }, h("span", { class: "sk" }, "Said"), at), md(e.detail ?? e.text));
+  if (s.kind === "event") {
+    const child = data.children.find((c) => e.details?.task && c.trigger === `task:${e.details.task}`);
+    return h("div", { class: "step event" }, h("div", { class: "shead" }, h("span", { class: "sk" }, whoActed(e.actor) || "Change"), at),
+      h("div", {}, e.text), child ? h("button", { class: "link", onclick: () => openInteraction(child.id) }, `Open ${labelOf(child.agent)}'s run #${child.id} →`) : null);
+  }
+  if (s.kind === "tool") {
+    const r = s.result, out = r ? (r.detail ?? r.text) : null;
+    const st = s.refused || s.exec?.kind === "refused" ? ["bad", "Refused"] : r ? (r.ok === 0 ? ["bad", "Failed"] : ["good", "Done"]) : e.ok === 0 ? ["bad", "Failed"] : e.ok === 1 ? ["good", "Done"]
+      : !data.run.endedAt ? ["live", "Working…"] : ["muted", "No output recorded"];
+    return h("div", { class: `step tool k-${st[0]}` },
+      h("div", { class: "shead" }, h("span", { class: "num" }, n), h("span", { class: "sk" }, actionLabel(e.tool)), pill(st), at),
+      h("div", { class: "what" }, e.text),
+      block("Input", inputNode(e.detail), { note: e.tool ?? "" }),
+      s.approvals ? block("Approval", h("ul", { class: "appr" }, ...s.approvals.map((a) => h("li", {},
+        h("time", { datetime: a.at }, new Date(a.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })), " ", a.text)))) : null,
+      s.exec ? block(s.exec.kind === "refused" ? "Not run" : "How it ran", h("pre", {}, s.exec.detail ?? s.exec.text), { note: s.exec.text.replace(/:.*$/s, "") }) : null,
+      r ? block("Output", out ? h("pre", {}, out) : h("p", { class: "none" }, "Empty"), { note: `${linesOf(out)} line${linesOf(out) === 1 ? "" : "s"}` }) : null,
+      s.refused ? h("div", { class: "refused" }, "Refused: it isn't allowed to use this here, or you said no. It did not run.") : null);
+  }
+  if (s.kind === "refused") return h("div", { class: "step tool k-bad" }, h("div", { class: "shead" }, h("span", { class: "sk" }, `Refused: ${actionLabel(e.tool)}`), pill(["bad", "Refused"]), at),
+    h("div", { class: "what" }, e.text), e.detail ? block("What it tried", inputNode(e.detail)) : null);
+  return h("div", { class: `step ${e.ok === 0 ? "tool k-bad" : ""}` }, h("div", { class: "shead" }, h("span", { class: "sk" }, e.kind === "result" ? "Result" : e.kind), at),
+    h("pre", {}, e.detail ?? e.text));
+}
+function drawInteraction(data) {
+  const r = data.run, steps = stepsOf(data), end = data.entries.find((e) => e.kind === "end");
+  const result = end?.detail ?? r.result;
+  let n = 0;
+  const fact = (k, ...v) => h("div", { class: "fact" }, h("dt", {}, k), h("dd", {}, ...v));
+  const runLink = (x, label) => h("button", { class: "link", onclick: () => openInteraction(x.id) }, label);
+  const all = (open) => document.querySelectorAll("#stream .interaction details").forEach((d) => { d.open = open; });
+  const head = h("section", { class: "ihead" },
+    h("div", { class: "ihead-top" }, avatar(r.agent),
+      h("div", {}, h("div", { class: "iname" }, labelOf(r.agent)), h("div", { class: "trig" }, `Interaction #${r.id}`)), pill(runStatus(r))),
+    h("dl", { class: "facts" },
+      fact("Started by", triggerText(r.trigger, data.task?.from ?? r.taskFrom)),
+      fact("When", fullTime(r.startedAt)),
+      fact("Took", r.endedAt ? durOf(r.startedAt, r.endedAt) : `${durOf(r.startedAt)} so far`),
+      r.model ? fact("Model", `${modelLabel(r.model)}, ${(EFFORT_LABEL[r.effort] ?? r.effort ?? "").toLowerCase()} effort`) : null,
+      fact("Did", ...countsOf(r).filter(Boolean).flatMap((x, i) => (i ? [", ", x] : [x])), r.turns != null ? `, ${r.turns} turns` : ""),
+      data.parent ? fact("Part of", runLink(data.parent, `${labelOf(data.parent.agent)}'s interaction #${data.parent.id}`)) : null,
+      data.children.length ? fact("Started", ...data.children.flatMap((c, i) => [i ? ", " : "", runLink(c, `${labelOf(c.agent)} #${c.id}`), ` (${c.endedAt ? STATUS_TEXT[c.status] ?? c.status : "running"})`])) : null));
+  const toolbar = h("div", { class: "itools" },
+    h("button", { class: "btn sm", onclick: () => { S.runOpen = null; S.runData = null; renderActivity(); } }, "‹ All interactions"),
+    h("span", { style: "flex:1" }),
+    h("button", { class: "btn sm", onclick: () => all(true) }, "Expand all"), h("button", { class: "btn sm", onclick: () => all(false) }, "Collapse all"));
+  const request = h("section", { class: "isec" }, h("h3", {}, data.task ? `Task #${data.task.id} from ${labelOf(data.task.from)}` : r.trigger === "schedule" ? "Its scheduled instructions" : "What it was asked"),
+    r.request ? h("div", { class: "req-box" }, r.request) : h("p", { class: "none" }, "Not recorded (the log may have been purged)."));
+  const timeline = h("section", { class: "isec" }, h("h3", {}, "What happened, step by step"),
+    steps.length ? h("div", { class: "steps" }, ...steps.map((s) => stepNode(s, s.kind === "tool" ? ++n : null, data)))
+      : h("p", { class: "none" }, r.endedAt ? "It answered without using any tools." : "Nothing yet…"));
+  const outcome = h("section", { class: `isec outcome k-${runStatus(r)[0]}` }, h("h3", {}, r.endedAt ? "Result" : "Still working"),
+    r.endedAt ? (result ? md(result) : h("p", { class: "none" }, "No result.")) : h("p", { class: "none" }, "This updates as it works."));
+  $("#stream").replaceChildren(h("div", { class: "activity interaction" }, toolbar, head, request, timeline, outcome));
+}
+// Live: a run being watched is reloaded as entries arrive; the list as runs start and end.
+let liveRunTimer = null;
+function liveInteraction(e) {
+  if (S.view?.kind !== "activity" || S.activityMode !== "runs") return;
+  const watching = S.runOpen != null && (e.run === S.runOpen || (e.kind === "event" && !S.runData?.run.endedAt && (e.agent === S.runData?.run.agent || e.actor === S.runData?.run.agent)));
+  const listChanged = S.runOpen == null && (e.kind === "start" || e.kind === "end");
+  if (!watching && !listChanged) return;
+  clearTimeout(liveRunTimer);
+  liveRunTimer = setTimeout(() => {
+    if (S.runOpen != null) {
+      const s = $("#scroll"), bottom = s.scrollHeight - s.scrollTop - s.clientHeight < 120;
+      renderInteraction(S.runOpen, { keepScroll: true }).then(() => { if (bottom) s.scrollTop = s.scrollHeight; });
+    } else renderRuns();
+  }, 500);
+}
+// Purging is yours only: it asks for your password again. Agents can add to the log and read it, never change or delete it.
+async function openPurgeDrawer() {
+  let stats = {};
+  try { stats = await api("GET", "/api/log?kinds=none"); } catch { /* shown without the count */ }
+  const older = h("input", { type: "radio", name: "purge-scope", id: "purge-older", checked: true });
+  const all = h("input", { type: "radio", name: "purge-scope", id: "purge-all" });
+  const days = h("input", { class: "field", type: "number", min: "1", value: "30", "aria-label": "Days" });
+  const agent = h("select", { class: "field", id: "purge-agent" }, h("option", { value: "" }, "All agents"), ...S.agents.map((a) => h("option", { value: a.name }, labelOf(a.name))));
+  const pass = h("input", { class: "field", type: "password", id: "purge-pass", autocomplete: "current-password" });
+  const purge = async (btn) => {
+    if (!pass.value) return toast("Type your password to purge");
+    const what = `${all.checked ? "ALL log entries" : `log entries older than ${days.value} days`}${agent.value ? ` of ${labelOf(agent.value)}` : ""}`;
+    if (!confirm(`Delete ${what}? This can't be undone.`)) return;
+    btn.disabled = true;
+    try {
+      const r = await api("POST", "/api/log/purge", { password: pass.value, days: all.checked ? null : Number(days.value), agent: agent.value || null });
+      close(); toast(`Purged ${r.entries} entries and ${r.files} run log file${r.files === 1 ? "" : "s"}`);
+      S.activityOpen.clear(); renderActivity();
+    } catch (e) { toast(e.message); btn.disabled = false; }
+  };
+  const close = showDrawer({ label: "Purge the log", focus: days,
+    title: [h("div", { class: "drawer-title" }, "Purge the log")],
+    body: [
+      h("p", { style: "margin:0;color:var(--muted)" }, "The log is kept until you purge it here or with ", h("code", {}, "agents logs purge"),
+        ". Nothing removes it automatically, and agents can only add to it and read it."),
+      stats.total != null ? h("p", { style: "margin:0" }, `It has ${stats.total} entries${stats.oldest ? `, the oldest from ${new Date(stats.oldest).toLocaleDateString()}` : ""}.`) : null,
+      h("div", {}, h("h4", {}, "What to delete"),
+        h("label", { class: "radio-row" }, older, "Older than", days, "days"),
+        h("label", { class: "radio-row" }, all, "Everything")),
+      h("div", {}, h("h4", {}, h("label", { for: "purge-agent" }, "Whose")), agent),
+      h("div", {}, h("h4", {}, h("label", { for: "purge-pass" }, "Your password")), pass,
+        h("p", { class: "field-hint" }, "Deletes the entries and each run's detailed log file. A line saying you purged stays in the log.")),
+    ].filter(Boolean),
+    foot: [h("button", { class: "btn danger", onclick: (e) => purge(e.target) }, "Purge")] });
+}
+
 // ---------------- agent drawer ----------------
 async function openDrawer(name) {
   const a = await api("GET", `/api/agents/${name}`);
   const root = $("#drawer-root");
-  const close = () => root.replaceChildren();
+  const close = () => { S.newHook = null; root.replaceChildren(); };
+  // Re-opened after a change: keep the scroll position.
+  const scrolled = root.querySelector(`.drawer[data-agent="${name}"] .drawer-body`)?.scrollTop ?? 0;
+  const reopen = () => openDrawer(name).catch((e) => toast(e.message));
+  const change = async (fn, done) => { try { await fn(); if (done) toast(done); await reopen(); } catch (e) { toast(e.message); } };
   const act = async (action, label) => { try { await api("POST", `/api/agents/${name}/${action}`); toast(label); close(); await loadState(); if (S.view?.name === name) open(S.view); } catch (e) { toast(e.message); } };
+  // What it can use: anything the UI grants, plus CLI-only tools it already has (those can be taken away, not given back here).
+  // Tools every agent always has aren't listed; the server keeps them.
+  const own = a.tools.filter((t) => !S.baseTools.includes(t));
+  const choices = [...S.tools, ...own.filter((t) => !S.tools.includes(t))].filter((t) => !S.baseTools.includes(t));
+  const boxes = choices.map((t) => h("input", { type: "checkbox", value: t, checked: a.tools.includes(t),
+    onchange: () => { saveTools.hidden = !toolsChanged(); } }));
+  const picked = () => boxes.filter((b) => b.checked).map((b) => b.value);
+  const toolsChanged = () => picked().length !== own.length || picked().some((t) => !own.includes(t));
+  // Model and effort belong to the agent; every message uses them.
+  const saveSettings = (patch, done) => change(async () => { await api("PUT", `/api/agents/${name}/settings`, patch); await loadState(); }, done);
+  const modelOpt = (m) => h("option", { value: m, selected: m === a.model }, modelLabel(m));
+  const modelSel = h("select", { class: "field", "aria-label": "Model", onchange: (e) => saveSettings({ model: e.target.value }, `Uses ${modelLabel(e.target.value)} from now on`) },
+    ...S.models.includes(a.model) ? [] : [modelOpt(a.model)], ...S.modelGroups.map((g) => h("optgroup", { label: g.label }, ...g.models.map(modelOpt))));
+  const effortSel = h("select", { class: "field", "aria-label": "Effort", onchange: (e) => saveSettings({ effort: e.target.value }, `${EFFORT_LABEL[e.target.value]} effort from now on`) },
+    ...Object.entries(S.efforts).map(([e, t]) => h("option", { value: e, selected: e === a.effort }, `${EFFORT_LABEL[e]} (up to ${t} turns)`)));
+  const saveTools = h("button", { class: "btn primary", hidden: true, onclick: async (e) => {
+    e.target.disabled = true;
+    try { await api("PUT", `/api/agents/${name}/tools`, { tools: picked() }); toast("Saved"); await loadState(); openDrawer(name); }
+    catch (err) { toast(err.message); e.target.disabled = false; }
+  } }, "Save");
+  // Ask me first: granted tools it must stop and ask about before each use (rules on one tool of a server come from "Always allow").
+  const ruleOf = (t) => a.rules.find((r) => r.tool === t)?.mode;
+  const askable = a.tools.filter((t) => ["Write", "Edit", "Bash", "WebFetch"].includes(t) || (t.startsWith("mcp__") && t !== "mcp__agents"));
+  const toolRules = a.rules.filter((r) => !askable.includes(r.tool));
+  const askFirst = askable.length ? h("div", {}, h("h4", {}, "Ask me first"),
+    h("div", { class: "members" }, ...askable.map((t) => h("label", {},
+      h("input", { type: "checkbox", checked: ruleOf(t) === "ask", onchange: (e) => change(() => api("PUT", `/api/agents/${name}/rules`, { tool: t, mode: e.target.checked ? "ask" : null }),
+        e.target.checked ? `${labelOf(name)} asks you before each use of ${toolLabel(t).toLowerCase()}` : `${labelOf(name)} uses ${toolLabel(t).toLowerCase()} without asking`) }),
+      h("span", { style: "font-weight:600" }, toolLabel(t)), h("span", { class: "desc" }, ruleOf(t) === "ask" ? "Waits for your OK each time" : "Uses it freely")))),
+    ...toolRules.map((r) => h("div", { class: "mem-row" }, h("div", {}, h("code", {}, r.tool), h("div", { class: "by" }, r.mode === "allow" ? "Always allowed" : "Asks you first")),
+      h("button", { class: "btn sm", onclick: () => change(() => api("PUT", `/api/agents/${name}/rules`, { tool: r.tool, mode: null }), "Rule removed") }, "Remove"))),
+    h("p", { class: "field-hint" }, "It stops mid-task and waits for your OK (here and as a notification) before each use. " +
+      "Separately, every agent asks before anything irreversible or public you didn't ask for. OpenAI models can't wait, so they don't get these tools at all.")) : null;
+
+  // Commands it may run without asking (none by default), and what it may reach on your network.
+  const LAN_RULE = { none: "No network access", read: "Network: read-only", full: "Network: full" };
+  const ruleRow = (r) => h("div", { class: "mem-row" },
+    h("div", {}, h("code", {}, r.pattern), h("div", { class: "by" }, `${r.kind === "exact" ? "Exactly this" : "Anything starting with this"} · ${LAN_RULE[r.lan]} · #${r.id}${r.note ? ` · ${r.note}` : ""}`)),
+    h("button", { class: "btn sm danger", onclick: () => change(() => api("DELETE", `/api/command-rules/${r.id}`), "Rule removed: it asks again") }, "Remove"));
+  const rulePattern = h("input", { class: "field", maxlength: "2000", spellcheck: "false", autocomplete: "off", placeholder: "e.g. df -h, or lan curl -s http://192.168.1.50:8123/api/",
+    onkeydown: (e) => { if (e.key === "Enter") addRule(); } });
+  const ruleKind = h("select", { class: "field", "aria-label": "How it matches" }, h("option", { value: "exact" }, "Exactly"), h("option", { value: "prefix" }, "Starts with"));
+  const ruleLan = h("select", { class: "field", "aria-label": "Network access" }, h("option", { value: "none" }, "No network"), h("option", { value: "read" }, "Network read-only"), h("option", { value: "full" }, "Network full"));
+  const addRule = () => rulePattern.value.trim() && change(() => api("POST", `/api/agents/${name}/command-rules`, { kind: ruleKind.value, pattern: rulePattern.value, lan: ruleLan.value }), "It runs that without asking now");
+  const commands = h("div", {}, h("h4", {}, "Commands without asking"),
+    a.commandRules.length ? h("div", {}, ...a.commandRules.map(ruleRow)) : h("p", { style: "margin:0;color:var(--muted)" }, "None: it asks you before every command."),
+    h("div", { class: "inline-add", style: "flex-wrap:wrap" }, ruleKind, rulePattern, ruleLan, h("button", { class: "btn", onclick: addRule }, "Add")),
+    h("p", { class: "field-hint" }, "Only plain commands match: anything with ; & > < $ ` or ( ) still asks, and so does anything about the log or the database. " +
+      "After a \"starts with\" rule only plain words may follow (no quotes, \\ or * ?), so it can't smuggle a second command through ssh or sh -c. " +
+      "In a pipeline (a | b) every part must match. Each one is still in Activity, marked as auto-approved. At most 60 an hour, then it asks again."));
+  // What it can reach: every address (its browser's sites, devices on your network, connectors, the internet) and what for.
+  // Descriptions of sites and devices are yours: Describe edits them here (they show for every agent that reaches them).
+  const REACH_GROUP = { site: "In its browser", lan: "On your network", connector: "Connectors", web: "Internet" };
+  const reachRow = (r) => {
+    const edit = r.editable ? h("input", { class: "field", value: r.note, maxlength: "200", hidden: true, placeholder: "What it's for, e.g. Selling on OLX",
+      "aria-label": `What ${r.url} is for`, onkeydown: (e) => { if (e.key === "Enter") saveNote(); if (e.key === "Escape") { edit.hidden = true; text.hidden = false; } } }) : null;
+    const saveNote = () => change(() => r.kind === "site" ? api("POST", "/api/logins/sites", { describe: r.url, note: edit.value })
+      : api("PUT", `/api/lan/targets/${r.id}/note`, { note: edit.value }), edit.value.trim() ? "Description saved" : "Description removed");
+    const text = h("div", {}, !r.url ? null : /^[a-z]+:\/\//.test(r.url) ? h("code", { style: "overflow-wrap:anywhere" }, r.url) : h("span", { style: "font-weight:600" }, r.url),
+      r.note || r.editable ? h("div", { style: r.note ? "margin-top:2px" : "margin-top:2px;color:var(--muted);font-style:italic" }, r.note || "No description yet") : null,
+      r.detail ? h("div", { class: "by" }, r.detail) : null);
+    const device = r.kind === "lan" && r.id;
+    return h("div", { class: "mem-row" }, h("div", { style: "min-width:0" }, text, edit),
+      edit ? h("div", { class: "row-actions" }, h("button", { class: "btn sm", onclick: () => {
+        if (edit.hidden) { edit.hidden = false; text.hidden = true; edit.focus(); }
+        else if (edit.value.trim() !== r.note) saveNote(); else { edit.hidden = true; text.hidden = false; }
+      } }, r.note ? "Edit" : "Describe"),
+        device && r.ssh ? h("button", { class: "btn sm", title: "After you reset or replaced the device: the next ssh trusts the host key it presents",
+          onclick: () => confirm("Trust the host key it presents next time? Only if you changed or reset the device yourself.") && change(() => api("DELETE", `/api/lan/targets/${r.id}/host-key`), "The next ssh trusts its host key") }, "Trust new host key") : null,
+        device ? h("button", { class: "btn sm danger", onclick: () => confirm(`Stop ${labelOf(name)} reaching ${r.url}?`) && change(() => api("DELETE", `/api/lan/grants/${name}/${r.id}`), "Access removed") }, "Remove") : null) : null);
+  };
+  const reach = a.reach ?? [];
+  if (a.lan == null) reach.push({ kind: "lan", url: null, note: "", detail: "The LAN gateway isn't running, so it can't reach any device on your network" });
+  else if (!a.lan.length) reach.push({ kind: "lan", url: null, note: "", detail: "No device on your network. Ask it in the chat: it asks you for each device it needs." });
+  const network = h("div", {}, h("h4", {}, "What it can reach"),
+    ...Object.entries(REACH_GROUP).map(([kind, label]) => {
+      const rows = reach.filter((r) => r.kind === kind);
+      return rows.length ? h("div", { style: "margin-bottom:8px" }, h("div", { class: "by", style: "font-weight:600;margin:4px 0" }, label), ...rows.map(reachRow)) : null;
+    }),
+    a.browser ? h("div", { style: "display:flex;justify-content:flex-end;gap:8px;margin-top:6px" },
+      h("button", { class: "btn sm", onclick: () => openLoginsDrawer() }, "Change sites")) : null);
+
+  // Memory: notes it keeps between runs, shown to it every time. Yours to change.
+  const memRow = (m) => {
+    const edit = h("input", { class: "field", value: m.text, maxlength: "500", hidden: true,
+      onkeydown: (e) => { if (e.key === "Enter") change(() => api("PATCH", `/api/memories/${m.id}`, { text: edit.value }), "Note saved"); } });
+    const text = h("div", {}, m.text, h("div", { class: "by" }, `#${m.id} · ${m.created_by.startsWith("human") ? "you" : "it"} · ${whenOf(m.updated_at)}`));
+    return h("div", { class: "mem-row" }, h("div", {}, text, edit),
+      h("div", { class: "row-actions" },
+        h("button", { class: "btn sm", onclick: () => { const on = edit.hidden; edit.hidden = !on; text.hidden = on; if (on) edit.focus(); else if (edit.value !== m.text) change(() => api("PATCH", `/api/memories/${m.id}`, { text: edit.value }), "Note saved"); } }, "Edit"),
+        h("button", { class: "btn sm danger", onclick: () => change(() => api("DELETE", `/api/memories/${m.id}`), "Note removed") }, "Remove")));
+  };
+  const newNote = h("input", { class: "field", maxlength: "500", placeholder: "Add a note, e.g. Prices are always in EUR",
+    onkeydown: (e) => { if (e.key === "Enter" && newNote.value.trim()) change(() => api("POST", `/api/agents/${name}/memories`, { text: newNote.value }), "Note added"); } });
+  const memory = h("div", {}, h("h4", {}, `Memory (${a.memories.length})`),
+    a.memories.length ? h("div", {}, ...a.memories.map(memRow)) : h("p", { style: "margin:0;color:var(--muted)" }, "Nothing yet. It saves notes here as it learns, and sees them on every run."),
+    h("div", { class: "inline-add" }, newNote, h("button", { class: "btn", onclick: () => newNote.value.trim() && change(() => api("POST", `/api/agents/${name}/memories`, { text: newNote.value }), "Note added") }, "Add")));
+
+  // Webhooks: secret addresses that start it with whatever is posted to them.
+  const hookName = h("input", { class: "field", maxlength: "40", placeholder: "Name, e.g. github-push", autocomplete: "off",
+    onkeydown: (e) => { if (e.key === "Enter") createHook(); } });
+  const createHook = () => hookName.value.trim() && change(async () => {
+    const r = await api("POST", `/api/agents/${name}/triggers`, { name: hookName.value });
+    S.newHook = { agent: name, url: new URL(r.path, location.origin).href };
+  }, "Webhook created: copy its address now");
+  const fresh = S.newHook?.agent === name ? S.newHook : null;
+  const webhooks = h("div", {}, h("h4", {}, "Webhooks"),
+    fresh ? h("div", {}, h("div", { class: "hook-url" }, h("code", {}, fresh.url),
+      h("button", { class: "btn sm", onclick: () => navigator.clipboard?.writeText(fresh.url).then(() => toast("Copied"), () => toast("Select it and copy it")) }, "Copy")),
+      h("p", { class: "field-hint" }, "Shown only now: the address is the key. Lost it? Delete the webhook and make a new one.")) : null,
+    ...a.triggers.map((t) => h("div", { class: "mem-row" },
+      h("div", {}, h("div", { style: "font-weight:600" }, t.name, t.enabled ? "" : " (off)"),
+        h("div", { class: "by" }, t.count ? `Started it ${t.count} time${t.count > 1 ? "s" : ""}, last ${whenOf(t.lastAt)}` : "Not called yet")),
+      h("div", { class: "row-actions" },
+        h("button", { class: "btn sm", onclick: () => change(() => api("PATCH", `/api/triggers/${t.id}`, { enabled: !t.enabled }), t.enabled ? "Turned off" : "Turned on") }, t.enabled ? "Turn off" : "Turn on"),
+        h("button", { class: "btn sm danger", onclick: () => confirm(`Delete the webhook “${t.name}”? Whatever calls it stops working.`) && change(() => api("DELETE", `/api/triggers/${t.id}`), "Webhook deleted") }, "Delete")))),
+    h("div", { class: "inline-add" }, hookName, h("button", { class: "btn", onclick: createHook }, "Create")),
+    h("p", { class: "field-hint" }, "A POST to a webhook's address starts a run with what was sent (GitHub, Home Assistant, IFTTT, a script…). " +
+      "It treats that as data, not instructions. To call it from the internet, publish only the /hooks/ path (see the README)."));
+
   root.replaceChildren(h("div", { class: "scrim", onclick: close }),
-    h("aside", { class: "drawer", role: "dialog", "aria-label": `${labelOf(name)} details` },
+    h("aside", { class: "drawer", role: "dialog", "aria-label": `${labelOf(name)} details`, "data-agent": name },
       h("div", { class: "drawer-head" }, avatar(name), h("div", { style: "flex:1" }, h("div", { class: "title", style: "font:650 18px var(--font-head)" }, labelOf(name)), h("div", { class: "sub", style: "color:var(--muted);font-size:13px" }, a.displayName ? `@${name}, ${a.enabled ? "enabled" : "disabled"}` : a.enabled ? "Enabled" : "Disabled")),
         h("button", { class: "icon-btn", "aria-label": "Close", onclick: close }, "✕")),
       h("div", { class: "drawer-body" },
         a.description ? h("p", { style: "margin:0" }, a.description) : null,
         h("dl", { class: "facts" },
           h("dt", {}, "Runs"), h("dd", {}, cronText(a.schedule)),
-          h("dt", {}, "Model"), h("dd", {}, `${modelLabel(a.model)}, ${EFFORT_LABEL[a.effort].toLowerCase()} effort (up to ${a.maxTurns} turns)`),
-          h("dt", {}, "Can use"), h("dd", {}, a.tools.length ? a.tools.map((t) => h("span", { class: "chip" }, toolLabel(t))) : "No tools"),
+          h("dt", {}, "Model"), h("dd", {}, modelSel),
+          h("dt", {}, "Effort"), h("dd", {}, effortSel),
           h("dt", {}, "Created by"), h("dd", {}, a.createdBy)),
+        h("div", {}, h("h4", {}, "Can use"), h("div", { class: "members" }, ...choices.map((t, i) => {
+          const cliOnly = !S.tools.includes(t);
+          return h("label", { title: cliOnly ? "Only the agents CLI can give this back once removed" : null },
+            boxes[i], h("span", { style: "font-weight:600" }, toolLabel(t)), h("span", { class: "desc" }, cliOnly ? `${t}, CLI only` : t));
+        })), h("p", { class: "field-hint" }, "Or ask it in the chat, e.g. \"you can write files now\". When it needs something new, it asks you first."),
+          h("div", { style: "display:flex;justify-content:flex-end" }, saveTools)),
+        askFirst,
+        commands,
+        network,
         h("div", { style: "display:flex;gap:8px;flex-wrap:wrap" },
           h("button", { class: "btn", onclick: () => act("reset", "New conversation started") }, "New conversation"),
+          a.browser ? h("button", { class: "btn", onclick: () => openBrowserView(name) }, "Watch its browser") : null,
           h("button", { class: `btn${a.enabled ? " danger" : " primary"}`, onclick: () => act(a.enabled ? "disable" : "enable", a.enabled ? "Disabled" : "Enabled") }, a.enabled ? "Disable" : "Enable")),
+        memory,
+        webhooks,
         h("div", {}, h("h4", {}, "Instructions"), h("pre", {}, a.prompt)),
         h("div", {}, h("h4", {}, "Recent runs"), a.runs.length ? h("div", { class: "runs" }, ...a.runs.map((r) =>
-          h("div", {}, h("time", {}, whenOf(r.started_at)), h("span", {}, `${r.trigger.replace("agent:", "asked by ").replace(/^group:\d+$/, "group chat")}:${r.status ?? "running"}${r.turns ? `, ${r.turns} turns` : ""}`)))) : h("p", { style: "margin:0;color:var(--muted)" }, "No runs yet.")))));
+          h("div", {}, h("time", {}, whenOf(r.started_at)), h("span", {}, `${runLabel(r.trigger)}: ${r.status ?? "running"}${r.turns ? `, ${r.turns} turns` : ""}`)))) : h("p", { style: "margin:0;color:var(--muted)" }, "No runs yet.")))));
+  root.querySelector(".drawer-body").scrollTop = scrolled;
 }
+const runLabel = (t) => t.startsWith("agent:") ? `asked by ${t.slice(6)}` : /^group:\d+$/.test(t) ? "group chat" : t.startsWith("webhook:") ? `webhook ${t.slice(8)}`
+  : t.startsWith("task:") ? `task #${t.slice(5)}` : t === "tasks" ? "tasks came back" : t;
 
 // ---------------- create drawer: pick agent or group, then its form ----------------
 const NAME_PARTS = [
@@ -863,20 +1805,24 @@ const NAME_PARTS = [
 ];
 function randomName() {
   const pick = (l) => l[Math.floor(Math.random() * l.length)];
+  const cap = (w) => w[0].toUpperCase() + w.slice(1);
   for (let i = 0; i < 50; i++) {
-    const n = `${pick(NAME_PARTS[0])}-${pick(NAME_PARTS[1])}`;
-    if (!S.agents.some((a) => a.name === n)) return n;
+    const n = `${cap(pick(NAME_PARTS[0]))} ${cap(pick(NAME_PARTS[1]))}`;
+    if (!S.agents.some((a) => a.name === agentId(n))) return n;
   }
-  return `agent-${Date.now().toString(36)}`;
+  return `Agent ${Date.now().toString(36)}`;
 }
-const NEW_AGENT_TOOLS = ["Read", "Write", "WebSearch", "WebFetch"]; // ticked by default: its own files and the web
+// Same as the server: "Cadô, CAD expert" -> "cado-cad-expert" (its folder, chat and @mention).
+const agentId = (name) => name.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-").slice(0, 32).replace(/^-+|-+$/g, "");
+// Every agent has S.baseTools (read and search its own files, search the web); anything else you tick yourself.
 
 // A drawer on the right: header (optional Back, title, Close), scrolling body, optional footer.
-function showDrawer({ label, title, back, body, foot, focus }) {
+function showDrawer({ label, title, back, body, foot, focus, wide = false }) {
   const root = $("#drawer-root");
   const close = () => root.replaceChildren();
   root.replaceChildren(h("div", { class: "scrim", onclick: close }),
-    h("aside", { class: "drawer", role: "dialog", "aria-label": label },
+    h("aside", { class: `drawer${wide ? " wide" : ""}`, role: "dialog", "aria-label": label },
       h("div", { class: "drawer-head" },
         back ? h("button", { class: "icon-btn", "aria-label": "Back", title: "Back", onclick: back }, h("span", { "aria-hidden": "true", style: "font-size:22px" }, "‹")) : null,
         ...[title].flat(),
@@ -886,6 +1832,135 @@ function showDrawer({ label, title, back, body, foot, focus }) {
   setTimeout(() => (focus ?? root.querySelector(".drawer-body button, .drawer-body input, .drawer-body textarea"))?.focus(), 0);
   return close;
 }
+// ---------------- side panes: collapsible sidebar, docked browser ----------------
+// Layout choices kept in this browser only (wrapped: storage can be blocked).
+const pref = { get: (k) => { try { return localStorage.getItem(`ui.${k}`); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(`ui.${k}`, v); } catch { /* not kept */ } } };
+const ICON_SIDEBAR = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>';
+function setSideCollapsed(on) {
+  $("#app").classList.toggle("side-collapsed", on); pref.set("sideCollapsed", on ? "1" : "");
+  document.querySelectorAll(".side-toggle").forEach((b) => { b.title = on ? "Show the sidebar" : "Hide the sidebar"; b.setAttribute("aria-label", b.title); b.setAttribute("aria-expanded", String(!on)); });
+}
+function sideToggle() {
+  const on = $("#app").classList.contains("side-collapsed");
+  const b = h("button", { class: "icon-btn side-toggle", title: on ? "Show the sidebar" : "Hide the sidebar", "aria-label": on ? "Show the sidebar" : "Hide the sidebar",
+    "aria-expanded": String(!on), onclick: () => setSideCollapsed(!$("#app").classList.contains("side-collapsed")) });
+  b.innerHTML = ICON_SIDEBAR;
+  return b;
+}
+setSideCollapsed(pref.get("sideCollapsed") === "1");
+// The dock: a pane on the right of the chat (full screen on a phone), sized by dragging the bar between them.
+const setDockW = (w) => $("#app").style.setProperty("--dock-w", `${Math.round(w)}px`);
+{ const w = Number(pref.get("dockW")); if (w > 0) setDockW(w); }
+function showDock({ label, title, body, foot }) {
+  const dock = $("#dock");
+  dock.setAttribute("aria-label", label);
+  dock.replaceChildren(
+    h("div", { class: "drawer-head" }, ...[title].flat(), h("button", { class: "icon-btn", "aria-label": "Close", title: "Close", onclick: closeDock }, "✕")),
+    h("div", { class: "drawer-body" }, ...body),
+    ...(foot?.length ? [h("div", { class: "drawer-foot" }, ...foot)] : []));
+  dock.hidden = false; $("#split").hidden = false;
+  $("#drawer-root").replaceChildren();
+}
+function closeDock() { $("#dock").hidden = true; $("#split").hidden = true; $("#dock").replaceChildren(); }
+{
+  const split = $("#split");
+  // The dock's width is the room right of the pointer; the chat and dock keep their minimum widths (CSS).
+  const widthAt = (x) => { const r = $("#app").getBoundingClientRect(); return Math.max(300, r.right - x); };
+  const done = () => { pref.set("dockW", Math.round($("#dock").getBoundingClientRect().width)); };
+  split.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); split.setPointerCapture(e.pointerId);
+    split.classList.add("dragging"); document.body.classList.add("resizing");
+  });
+  split.addEventListener("pointermove", (e) => { if (split.hasPointerCapture(e.pointerId)) setDockW(widthAt(e.clientX)); });
+  const stop = (e) => {
+    if (!split.hasPointerCapture(e.pointerId)) return;
+    split.releasePointerCapture(e.pointerId); split.classList.remove("dragging"); document.body.classList.remove("resizing"); done();
+  };
+  split.addEventListener("pointerup", stop); split.addEventListener("pointercancel", stop);
+  split.addEventListener("dblclick", () => { $("#app").style.removeProperty("--dock-w"); pref.set("dockW", ""); });
+  split.addEventListener("keydown", (e) => {
+    const d = { ArrowLeft: 32, ArrowRight: -32 }[e.key]; if (!d) return;
+    e.preventDefault(); setDockW(Math.max(300, $("#dock").getBoundingClientRect().width + d)); done();
+  });
+}
+// ---------------- live view of an agent's own browser ----------------
+// A picture of its page, refreshed while this is open. With "Take control" on, your clicks, scrolling and typing
+// go to the page: for a captcha or a code only you have. Opened from a takeover request, it also hands the browser back.
+const ICON_SCREEN = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>';
+function browserButton(name) {
+  const b = h("button", { class: "icon-btn", title: "Watch its browser", "aria-label": `Watch ${labelOf(name)}'s browser`, onclick: () => openBrowserView(name) });
+  b.innerHTML = ICON_SCREEN;
+  return b;
+}
+function openBrowserView(name, { action = null } = {}) {
+  let control = !!action, vp = [1280, 720], busy = false;
+  const img = h("img", { alt: `${labelOf(name)}'s browser`, draggable: "false", hidden: true });
+  const empty = h("p", { style: "color:#c9d1dd;margin:24px;text-align:center" }, "Loading…");
+  const frame = h("div", { class: `live${control ? " control" : ""}` }, img, empty);
+  const status = h("div", { class: "live-status" }, "");
+  const at = (e) => { const r = img.getBoundingClientRect(); return { x: (e.clientX - r.left) * vp[0] / r.width, y: (e.clientY - r.top) * vp[1] / r.height }; };
+  const send = async (input) => {
+    try { await api("POST", `/api/browser/${name}/input`, input); setTimeout(refresh, 200); } catch (e) { toast(e.message); }
+  };
+  img.addEventListener("click", (e) => { if (control) send({ type: "click", ...at(e) }); });
+  let wheel = 0, wheelTimer = null;
+  img.addEventListener("wheel", (e) => {
+    if (!control) return;
+    e.preventDefault(); wheel += e.deltaY;
+    if (wheelTimer) return;
+    const p = at(e);
+    wheelTimer = setTimeout(() => { send({ type: "scroll", ...p, dy: wheel }); wheel = 0; wheelTimer = null; }, 120);
+  }, { passive: false });
+  const typed = h("input", { class: "field grow", autocomplete: "off", spellcheck: "false", placeholder: "Type here, then Send: it goes where you last clicked",
+    onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); typeIt(); } } });
+  const typeIt = () => { if (typed.value) { send({ type: "type", text: typed.value }); typed.value = ""; } };
+  const key = (k, label = k) => h("button", { class: "btn sm", onclick: () => send({ type: "key", key: k }) }, label);
+  const keys = h("div", { class: "live-bar", hidden: !control }, typed, h("button", { class: "btn sm primary", onclick: typeIt }, "Send"),
+    key("Enter"), key("Tab"), key("Backspace", "⌫"), key("Escape", "Esc"));
+  const toggle = h("input", { type: "checkbox", checked: control, onchange: (e) => { control = e.target.checked; frame.classList.toggle("control", control); keys.hidden = !control; } });
+  async function refresh() {
+    if (!img.isConnected) return clearInterval(timer);
+    if (busy || document.hidden) return;
+    busy = true;
+    try {
+      const r = await fetch(`/api/browser/${name}/shot`, { credentials: "same-origin", cache: "no-store" });
+      if (r.status === 401) { clearInterval(timer); return showLogin(); }
+      if (!r.ok) { empty.textContent = (await r.json().catch(() => ({}))).error || `Couldn't load it (${r.status})`; img.hidden = true; empty.hidden = false; return; }
+      const old = img.src;
+      img.src = URL.createObjectURL(await r.blob());
+      if (old.startsWith("blob:")) URL.revokeObjectURL(old);
+      img.hidden = false; empty.hidden = true;
+      vp = (r.headers.get("x-viewport") || "1280x720").split("x").map(Number);
+      const dec = (s, f) => { try { return f(s || ""); } catch { return s || ""; } };
+      status.textContent = [dec(r.headers.get("x-page-title"), decodeURIComponent), dec(r.headers.get("x-page-url"), decodeURI)].filter(Boolean).join(" · ");
+    } catch { /* next tick */ } finally { busy = false; }
+  }
+  const timer = setInterval(refresh, 900);
+  const note = action ? h("input", { class: "field grow", autocomplete: "off", placeholder: "Note for it (optional), e.g. what you did" }) : null;
+  const answer = (what) => async (e) => {
+    e.target.disabled = true;
+    try {
+      await api("POST", `/api/actions/${action.id}/${what}`, { note: note.value });
+      setActionStatus(action.id, what === "done" ? "done" : "denied");
+      toast(what === "done" ? `${labelOf(name)} carries on` : `${labelOf(name)} stops there`);
+      closeDock(); loadState();
+    } catch (err) { toast(err.message); e.target.disabled = false; }
+  };
+  showDock({ label: `${labelOf(name)}'s browser`, title: [avatar(name, "sm"), h("div", { class: "drawer-title" }, `${labelOf(name)}'s browser`)], body: [
+    action ? h("div", { class: "ask", style: "margin:0;width:100%" }, h("div", { class: "ask-title" }, "What it needs from you"), h("div", { class: "ask-line", style: "color:var(--ink)" }, action.title)) : null,
+    h("div", { class: "live-bar" },
+      h("button", { class: "btn sm", onclick: () => send({ type: "back" }) }, "‹ Back"),
+      h("button", { class: "btn sm", onclick: () => send({ type: "reload" }) }, "Reload"),
+      h("label", { class: "live-control", style: "margin-left:auto" }, toggle, "Take control")),
+    frame, status, keys,
+    h("p", { class: "field-hint", style: "margin:0" }, "Only you see this. With Take control on, click the picture to click the page and scroll over it to scroll. " +
+      "The agent may be using the browser too: take control when it's waiting for you."),
+  ], foot: action ? [note, h("button", { class: "btn danger", onclick: answer("deny") }, "Can't do it"), h("button", { class: "btn primary", onclick: answer("done") }, "Done, hand it back")] : null });
+  refresh();
+}
+
 const ICON_AGENT = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21c0-3.9 3.6-7 8-7s8 3.1 8 7"/></svg>';
 const ICON_GROUP = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM2 20c0-3 2.7-5 6-5s6 2 6 5M14 15.3c.6-.2 1.3-.3 2-.3 3.3 0 6 2 6 5"/></svg>';
 
@@ -907,26 +1982,32 @@ function openCreateDrawer() {
 }
 
 function openAgentDrawer(suggested = "") {
-  const name = h("input", { class: "field", id: "agent-name", maxlength: "32", autocomplete: "off", spellcheck: "false", value: suggested || randomName(),
-    oninput: (e) => { const v = e.target.value.toLowerCase().replace(/[\s_]+/g, "-"); if (v !== e.target.value) e.target.value = v; } });
+  const hint = h("p", { class: "field-hint" });
+  const showId = () => {
+    const id = agentId(name.value);
+    hint.textContent = id.length < 3 ? "Use at least 3 letters or digits." : `Mention it as @${id}.`;
+  };
+  const name = h("input", { class: "field", id: "agent-name", maxlength: "60", autocomplete: "off", spellcheck: "false", value: suggested || randomName(), oninput: showId });
+  showId();
   const prompt = h("textarea", { class: "field", id: "agent-prompt", rows: "7", maxlength: "8000",
     placeholder: "What should it do? e.g. When I send a recipe, list the ingredients by supermarket aisle and suggest swaps for anything hard to find." });
-  const boxes = S.tools.map((t) => h("input", { type: "checkbox", value: t, checked: NEW_AGENT_TOOLS.includes(t) }));
+  const grantable = S.tools.filter((t) => !S.baseTools.includes(t)); // always-on tools are added by the server
+  const boxes = grantable.map((t) => h("input", { type: "checkbox", value: t }));
   const save = async (btn) => {
     btn.disabled = true;
     try {
       const r = await api("POST", "/api/agents", { name: name.value, prompt: prompt.value, tools: boxes.filter((b) => b.checked).map((b) => b.value) });
-      close(); toast(`${r.agent.name} created`); await loadState(); open({ kind: "agent", name: r.agent.name });
+      close(); toast(`${r.agent.displayName || r.agent.name} created`); await loadState(); open({ kind: "agent", name: r.agent.name });
     } catch (e) { toast(e.message); btn.disabled = false; }
   };
   const close = showDrawer({ label: "New agent", title: h("div", { class: "drawer-title" }, "New agent"), back: openCreateDrawer, focus: prompt, body: [
     h("div", {}, h("h4", {}, h("label", { for: "agent-name" }, "Name")),
       h("div", { style: "display:flex;gap:6px;align-items:center" }, name,
-        h("button", { class: "icon-btn", title: "Another name", "aria-label": "Another name", onclick: () => { name.value = randomName(); } }, "↻")),
-      h("p", { class: "field-hint" }, "Lowercase letters, digits and dashes. Change it if you like.")),
+        h("button", { class: "icon-btn", title: "Another name", "aria-label": "Another name", onclick: () => { name.value = randomName(); showId(); } }, "↻")),
+      hint),
     h("div", {}, h("h4", {}, h("label", { for: "agent-prompt" }, "Instructions")), prompt,
       h("p", { class: "field-hint" }, "Its whole job, in your own words. It runs when you message it, and keeps nothing between chats except files in its own folder.")),
-    S.tools.length ? h("div", {}, h("h4", {}, "Can use"), h("div", { class: "members" }, ...S.tools.map((t, i) =>
+    grantable.length ? h("div", {}, h("h4", {}, "Can use"), h("div", { class: "members" }, ...grantable.map((t, i) =>
       h("label", {}, boxes[i], h("span", { style: "font-weight:600" }, toolLabel(t)), h("span", { class: "desc" }, t))))) : null,
   ], foot: [h("button", { class: "btn primary", onclick: (e) => save(e.target) }, "Save")] });
 }
@@ -957,7 +2038,7 @@ function openGroupDrawer(g = null) {
       h("div", {}, h("h4", {}, h("label", { for: "group-name" }, "Name")), name),
       h("div", {}, h("h4", {}, "Agents"), h("div", { class: "members" }, ...S.agents.map((a, i) =>
         h("label", {}, boxes[i], avatar(a.name, "sm"),
-          h("div", { style: "min-width:0" }, h("div", { style: "font-weight:600" }, a.name, a.enabled ? "" : " (off)"), h("div", { class: "desc" }, a.description)))))),
+          h("div", { style: "min-width:0" }, h("div", { style: "font-weight:600" }, labelOf(a.name), a.enabled ? "" : " (off)"), h("div", { class: "desc" }, a.description)))))),
     ],
     foot: [g ? h("button", { class: "btn danger", onclick: remove, style: "margin-right:auto" }, "Delete group") : null,
       h("button", { class: "btn primary", onclick: (e) => save(e.target) }, "Save")].filter(Boolean) });
@@ -1152,13 +2233,16 @@ function deviceArgs(text) {
   return { title: "Press Enter", items };
 }
 
-// Links: #agent=<name> (a tapped notification), #devices, #pair=<code>
+// Links: #agent=<name> (a tapped notification), #devices, #pair=<code>, #logins, #activity, #run=<id> (one interaction)
 function openFromHash() {
   const [k, v = ""] = location.hash.slice(1).split("=");
   if (!k) return;
   history.replaceState(null, "", location.pathname + location.search); // so the same link works again
   if (k === "agent" && S.agents.some((a) => a.name === v)) open({ kind: "agent", name: v });
+  if (k === "activity") { S.runOpen = null; open({ kind: "activity" }); }
+  if (k === "run" && /^\d+$/.test(v)) openInteraction(Number(v));
   if (k === "devices") openDevicesDrawer();
+  if (k === "logins") openLoginsDrawer();
   if (k === "pair") openDevicesDrawer({ pair: decodeURIComponent(v) });
 }
 window.addEventListener("hashchange", () => { if (!$("#app").hidden) openFromHash(); });
@@ -1186,7 +2270,7 @@ const agentPicks = (cmd, q, keep, run) => {
 const agentArg = (cmd, keep, empty, run) => (text) =>
   ({ title: "Agents", empty, items: agentPicks(cmd, text.trim().split(/\s+/)[0].toLowerCase(), keep, run) });
 const PALETTE = [
-  { name: "new", arg: "[name]", desc: "Create an agent (random name if you skip it)", run: (arg) => openAgentDrawer(arg.toLowerCase()) },
+  { name: "new", arg: "[name]", desc: "Create an agent (random name if you skip it)", run: (arg) => openAgentDrawer(arg.trim()) },
   { name: "ask", arg: "<agent> <message>", desc: "Send a message to any agent", needsArg: true, args: (text) => {
     const [, who, gap, msg = ""] = text.replace(/^\s+/, "").match(/^(\S*)(\s+([\s\S]*))?$/);
     if (!gap) return { title: "Ask which agent?", empty: "No agent that's turned on matches", items: agentPicks("ask", who.toLowerCase(), (a) => a.enabled, null).map((it) => ({ ...it, insert: `/ask ${it.agent} ` })) };
@@ -1204,7 +2288,9 @@ const PALETTE = [
     args: agentArg("disable", (a) => a.enabled, "Every agent is already off", (n) => setAgentOn(n, false)) },
   { name: "group", desc: "Create a group chat", run: () => openGroupDrawer() },
   { name: "approvals", desc: "Open the suggestions waiting for you", run: () => open({ kind: "approvals" }) },
+  { name: "activity", desc: "Everything your agents did: commands, tools, what they said, changes, approvals (the log)", run: () => open({ kind: "activity" }) },
   { name: "devices", arg: "[add|pair|verify|test|remove]", desc: "Phones and computers notified when an agent finishes", run: () => openDevicesDrawer(), args: deviceArgs },
+  { name: "logins", desc: "Site logins for the browser agent (the vault)", run: () => openLoginsDrawer() },
   { name: "help", desc: "Show all commands", run: () => openCmd("/") },
 ];
 
@@ -1224,7 +2310,7 @@ function globalPaletteFor(q) {
   const arg = rest.trim();
   return { title: "Press Enter", items: [{ icon: "/", label: `/${cmd.name}${arg ? ` ${arg}` : ""}`, desc: cmd.desc, run: () => cmd.run(arg) }] };
 }
-// The message box's own commands (/new conversation, /model, ...), run by runCommand like before.
+// The message box's own commands (/new conversation, /run, ...), run by runCommand like before.
 function chatPaletteFor(q) {
   const [, word, rest] = q.match(/^\/(\S*)(\s[\s\S]*)?$/);
   const name = word.toLowerCase(), here = S.view?.kind === "agent" ? S.view.name : curGroup()?.name ?? "this chat";
@@ -1235,12 +2321,6 @@ function chatPaletteFor(q) {
   }
   const cmd = commandsHere().find((c) => c.name === name);
   if (!cmd) return { empty: COMMANDS.some((c) => c.name === name) ? `/${name} only works in an agent's own chat.` : noMatch(name), items: [] };
-  if (name === "model" || name === "effort") {
-    const v = rest.trim().toLowerCase(), values = name === "model" ? S.models : Object.keys(S.efforts);
-    return { title: name === "model" ? "Models" : "Effort", empty: `No ${name} matches “${v}”`, items: values.filter((x) => x.startsWith(v)).map((x) => ({
-      icon: "›", label: x, desc: name === "model" ? modelLabel(x) : `${EFFORT_LABEL[x]}, up to ${S.efforts[x]} turns`,
-      complete: `/${name} ${x}`, run: () => runCommand(`/${name} ${x}`) })) };
-  }
   return { title: "Press Enter", items: [{ icon: "/", label: `/${cmd.name}`, desc: cmd.desc, run: () => runCommand(`/${cmd.name}`) }] };
 }
 const cmdOpen = () => !$("#cmd").hidden;
@@ -1303,18 +2383,30 @@ $("#cmd-list").addEventListener("mousedown", (e) => e.preventDefault()); // keep
 $("#cmd-scrim").addEventListener("click", () => closeCmd());
 
 // ---------------- live updates ----------------
-let es, refreshTimer;
+let es, refreshTimer, retryTimer, missed = false;
 const refreshSoon = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => loadState().catch(() => {}), 400); };
 function connect() {
-  es?.close();
+  es?.close(); clearTimeout(retryTimer);
   es = new EventSource("/api/stream");
+  // Connected again after a gap (the server restarted, the phone was offline): load what happened meanwhile.
+  es.addEventListener("hello", () => {
+    if (!missed) return;
+    missed = false; S.live.clear(); S.progress = {}; // who is running now comes right after this
+    loadState().catch(() => {}); reloadMessages().catch(() => {});
+    if (S.view?.kind === "approvals") renderApprovals().catch(() => {});
+    if (S.view?.kind === "activity") renderActivity();
+  });
+  es.addEventListener("log", (ev) => {
+    const e = JSON.parse(ev.data);
+    if (S.view?.kind === "activity" && forActivity(e) && !S.activity.some((x) => x.id === e.id)) { S.activity.unshift(e); drawActivity(); }
+    liveInteraction(e);
+  });
   es.addEventListener("message", (ev) => {
     const m = JSON.parse(ev.data);
     const here = (S.view?.kind === "agent" && m.chat === S.view.name) || (S.view?.kind === "group" && m.chat === `group:${S.view.id}`);
     if (here && !S.messages.some((x) => x.id === m.id)) {
-      S.messages.push(m);
       if (m.role === "agent") delete S.progress[m.author];
-      renderMessages();
+      appendMessage(m);
     }
     refreshSoon();
   });
@@ -1342,10 +2434,34 @@ function connect() {
       loadState().then(() => { if (devicesOpen()) openDevicesDrawer(); }).catch(() => {});
     }
     if (/propose-/.test(e.action) && !here) toast(`${e.actor} suggested ${e.action === "propose-create" ? "a new agent" : "a change"}. Open Approvals to review.`);
+    // An agent waiting mid-run: its card arrives as a message in its chat; elsewhere, say so.
+    if (/^action-/.test(e.action)) {
+      if (e.action === "action-request" && !(S.view?.kind === "agent" && S.view.name === e.agent)) {
+        toast(e.details?.kind === "takeover" ? `${labelOf(e.agent)} needs you in its browser. See Approvals.` : `${labelOf(e.agent)} is waiting for your OK. See Approvals.`);
+      }
+      if (e.action !== "action-request" && e.details?.request) setActionStatus(e.details.request, e.action.slice(7));
+      if (S.view?.kind === "approvals") renderApprovals();
+      loadState().catch(() => {}); // who is waiting changed: recolour their dots
+    }
+    if (/^task-(start|done|fail)$/.test(e.action) && S.messages.some((m) => m.tasks?.some((t) => t.id === e.details?.task))) reloadMessages().catch(() => {});
+    if (/^(login|site)-/.test(e.action)) {
+      if (e.details?.request && (e.action === "login-save" || e.action === "login-dismiss")) setLoginStatus(e.details.request, e.action === "login-save" ? "saved" : "dismissed");
+      if (e.action === "login-request" && !here) toast(`${labelOf(e.actor)} needs your ${hostOf(e.details?.site)} login. Open its chat to add it.`);
+      loadLogins().then(() => { if (loginsOpen()) openLoginsDrawer(); });
+    }
     refreshSoon();
   });
-  es.onerror = () => { es.close(); setTimeout(() => api("GET", "/api/me").then(connect).catch(() => {}), 3000); };
+  es.onerror = () => { es.close(); missed = true; reconnect(); };
 }
+// Keeps trying until the server answers again: after 3 s, then up to 30 s apart. Signed out meanwhile: the login shows instead.
+function reconnect(delay = 3000) {
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(() => api("GET", "/api/me").then(connect, (e) => { if (e.message !== "Signed out") reconnect(Math.min(Math.max(delay, 1500) * 2, 30000)); }), delay);
+}
+// Back in view or back online (a phone waking up): don't wait for the next try.
+const wake = () => { if (!$("#app").hidden && es?.readyState === EventSource.CLOSED) reconnect(0); };
+document.addEventListener("visibilitychange", () => { if (!document.hidden) wake(); });
+window.addEventListener("online", wake);
 
 // ---------------- composer behaviour ----------------
 const autosize = () => { const t = $("#text"); t.style.height = "auto"; t.style.height = `${Math.min(t.scrollHeight, 180)}px`; };
@@ -1383,13 +2499,13 @@ $("#q").addEventListener("input", (e) => {
   S.filter = e.target.value; renderList();
 });
 $("#q").addEventListener("keydown", (e) => { if (e.key === "Escape" && e.target.value) { e.preventDefault(); e.stopPropagation(); e.target.value = S.filter = ""; renderList(); } });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#drawer-root").replaceChildren(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { S.newHook = null; $("#drawer-root").replaceChildren(); } });
 
 // ---------------- boot ----------------
-function showLogin() { $("#app").hidden = true; $("#login").hidden = false; es?.close(); setTimeout(() => $("#pw").focus(), 0); }
+function showLogin() { $("#app").hidden = true; $("#login").hidden = false; es?.close(); clearTimeout(retryTimer); setTimeout(() => $("#pw").focus(), 0); }
 async function boot() {
   $("#login").hidden = true; $("#app").hidden = false;
-  await loadState(); connect();
+  await Promise.all([loadState(), loadLogins()]); connect();
   await initPush().catch(() => {});
   openDefault(); openFromHash();
 }

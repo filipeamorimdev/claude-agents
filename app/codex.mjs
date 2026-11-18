@@ -18,9 +18,11 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createServer } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
-import { mkdir, writeFile, appendFile, rm } from "node:fs/promises";
+import { mkdir, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { createAgentsMcpServer, createSelfMcpServer } from "./agents-tool.mjs";
+import { usesLogins, AGENT_HEADER } from "./logins.mjs";
+import { APPROVAL_MINUTES } from "./store.mjs";
 
 // Installed outside /app (see Dockerfile): the sandbox hides /app, and Codex re-runs its own binary inside it.
 const CODEX_BIN = process.env.CODEX_PATH || "/usr/local/bin/codex";
@@ -73,7 +75,8 @@ function mcpServers(agent, registry, env, endpoints, log) {
   const approve = { default_tools_approval_mode: "approve" };
   let n = 0;
   const viaEnv = (value) => { const k = `MCP_SECRET_${n++}`; env[k] = String(value); return k; };
-  servers.self = { url: endpoints.self.url, bearer_token_env_var: viaEnv(endpoints.self.token), tool_timeout_sec: 60, ...approve };
+  // request_approval and request_takeover wait for the human
+  servers.self = { url: endpoints.self.url, bearer_token_env_var: viaEnv(endpoints.self.token), tool_timeout_sec: APPROVAL_MINUTES * 60 + 60, ...approve };
   for (const t of agent.tools.filter((t) => t.startsWith("mcp__"))) {
     const name = t.slice(5);
     const c = name === "agents" ? null : registry[name]?.config;
@@ -84,8 +87,10 @@ function mcpServers(agent, registry, env, endpoints, log) {
     } else if (!c) {
       log(agent.name, `MCP server "${name}" is not in config/mcp-servers.mjs, skipped`);
     } else if (c.url && (c.type ?? "http") === "http") {
+      // A browser with vault logins learns who is calling (see engine.mjs).
+      const headers = { ...c.headers, ...(usesLogins([t], registry) ? { [AGENT_HEADER]: agent.name } : {}) };
       servers[name] = { url: c.url, tool_timeout_sec: 300, ...approve,
-        ...(c.headers ? { env_http_headers: Object.fromEntries(Object.entries(c.headers).map(([h, v]) => [h, viaEnv(v)])) } : {}) };
+        ...(Object.keys(headers).length ? { env_http_headers: Object.fromEntries(Object.entries(headers).map(([h, v]) => [h, viaEnv(v)])) } : {}) };
     } else if (c.command) {
       servers[name] = { command: c.command, args: c.args ?? [], tool_timeout_sec: 300, ...approve,
         ...(c.env ? { env_vars: Object.entries(c.env).map(([k, v]) => { env[k] = String(v); return k; }) } : {}) };
@@ -128,13 +133,40 @@ const toolName = (item) => item.type === "command_execution" ? "shell"
   : item.type === "mcp_tool_call" ? `mcp__${item.server}__${item.tool}`
   : item.type === "web_search" ? "WebSearch" : "Edit";
 
+/** A finished Codex item as log entries: the call with its input, then how it went. */
+function logItem(item, act) {
+  if (!act) return;
+  const tool = toolName(item);
+  if (item.type === "command_execution") {
+    act("tool", `Run a command: ${item.command}`, { tool, detail: item.command });
+    const ok = item.status !== "failed" && !item.exit_code;
+    act("result", `${ok ? "Done" : `Failed (exit ${item.exit_code ?? "?"})`} (${tool}): ${item.aggregated_output ?? ""}`, { tool, detail: item.aggregated_output ?? "", ok });
+  } else if (item.type === "mcp_tool_call") {
+    act("tool", `${String(item.tool).replace(/_/g, " ")} (${item.server})`, { tool, detail: item.arguments ?? null });
+    const ok = item.status !== "failed" && !item.error;
+    const out = item.error?.message ?? (item.result?.content ?? []).map((b) => (b.type === "text" ? b.text : `[${b.type}]`)).join("\n");
+    act("result", `${ok ? "Done" : "Failed"} (${tool}): ${out}`, { tool, detail: out, ok });
+  } else if (item.type === "file_change") {
+    const files = (item.changes ?? []).map((c) => `${c.kind} ${c.path}`);
+    act("tool", `Change files: ${files.join(", ")}`, { tool, detail: files.join("\n"), ok: item.status !== "failed" });
+  } else if (item.type === "web_search") {
+    act("tool", `Search the web: ${item.query ?? ""}`, { tool, detail: item.query ?? null });
+  } else if (item.type === "agent_message" && item.text?.trim()) {
+    act("say", item.text, { detail: item.text });
+  } else if (item.type === "reasoning" && item.text?.trim()) {
+    act("think", item.text, { detail: item.text });
+  } else if (item.type === "error") {
+    act("result", `Failed: ${item.message ?? ""}`, { detail: item.message ?? null, ok: false });
+  }
+}
+
 /**
  * One turn on Codex.
  * @returns {Promise<{ok, status, result, turns, threadId, tokens}>}  throws if Codex can't start,
  *   or can't resume `resume` (the engine then starts a new conversation)
  */
 export async function runCodex({ agent, model, effort, prompt, instructions, images = [], resume, maxTurns,
-  workdir, dataDir, registry, tz, agentsCtx, logFile, log, onProgress }) {
+  workdir, dataDir, registry, tz, agentsCtx, writeLog, log, onProgress, act }) {
   if (!codexReady()) throw new Error(`ChatGPT isn't signed in. Run: ${LOGIN_HINT}`);
   const env = { PATH: process.env.PATH, HOME: process.env.HOME, CODEX_HOME: codexHome(), TZ: tz, TMPDIR: "/tmp" };
   const endpoints = {
@@ -178,13 +210,14 @@ export async function runCodex({ agent, model, effort, prompt, instructions, ima
     let turns = 0, result = "", failure = null, streamError = null, completed = false, stop = null;
     try {
       for await (const ev of events) {
-        await appendFile(logFile, JSON.stringify(ev) + "\n");
+        writeLog?.(ev);
         const item = ev.item;
         if (item && TOOL_ITEMS.has(item.type) && !seen.has(item.id)) {
           seen.add(item.id);
-          log(agent.name, `tool: ${toolName(item)}`);
+          log(agent.name, `tool: ${toolName(item)}${item.type === "command_execution" ? `: ${String(item.command ?? "").slice(0, 200)}` : ""}`);
           onProgress?.({ type: "tool", name: toolName(item) });
         }
+        if (ev.type === "item.completed" && item) logItem(item, act);
         if (ev.type === "item.completed" && TOOL_ITEMS.has(item.type)) {
           if (item.type === "command_execution" && item.aggregated_output?.includes(NO_SANDBOX)) {
             stop = { status: "error", result: "Codex's sandbox can't start in this container. Set AGENTS_SECCOMP=unconfined in the stack's variables and redeploy." };

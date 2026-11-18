@@ -42,10 +42,10 @@ Be concise. Do not invent versions: if a source can't be reached, say so in the 
 `.trim(),
   },
 
-  // Example: an agent with its own logged-in browser. Needs the browser container
-  // (COMPOSE_PROFILES=browser) and its logins in the BROWSER_SECRETS variable.
-  // It never sees passwords: to log in it types the secret NAMES (OLX_EMAIL, OLX_PASSWORD);
-  // the browser server fills in the real values and redacts them from what comes back.
+  // Example: an agent with its own logged-in browser. Needs the browser container and its vault
+  // (COMPOSE_PROFILES=browser). It never sees passwords: to log in it types the login NAMES
+  // (OLX_EMAIL, OLX_PASSWORD); the browser fills in the real values and redacts them from what comes back.
+  // A login it doesn't have, it asks you for with a form under its reply (saved straight to the vault).
   {
     name: "ad-master",
     description: "Tracks OLX listings (views, favourites) using its own logged-in browser",
@@ -57,10 +57,10 @@ Be concise. Do not invent versions: if a source can't be reached, say so in the 
     prompt: `
 You manage second-hand listings on OLX (www.olx.pt).
 
-1. Open "Os meus anúncios". If you are logged out, log in by typing the secret
-   names OLX_EMAIL and OLX_PASSWORD into the form (never ask for or write the values).
-   If a captcha or verification code appears, stop and write ./needs-human.md explaining
-   what you need, with the screenshot file name.
+1. Open "Os meus anúncios". If you are logged out, call list_logins and log in by typing
+   the login names (OLX_EMAIL, OLX_PASSWORD) into the form, never the values. If they aren't
+   saved, call request_login for them and stop. If a captcha or verification code appears,
+   stop and write ./needs-human.md explaining what you need, with the screenshot file name.
 2. For every active listing, record title, price, views and favourites.
 3. Write ./reports/YYYY-MM-DD.md with a table of listings and any listing with
    0 favourites after 7 days marked as "consider price drop".

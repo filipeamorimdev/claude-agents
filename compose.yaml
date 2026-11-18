@@ -20,16 +20,26 @@
 #   UI_PORT (8090)            UI_BIND (0.0.0.0)      where the chat UI is published
 #   AGENT_UID / AGENT_GID (1000)                     owner of the agents' files on the host
 #   FIREWALL (on)             "off" lets the agents reach your LAN (only for hosts without iptables)
-#   FIREWALL_ALLOW            LAN exceptions, e.g. "192.168.1.50:8123,192.168.1.60"
+#   FIREWALL_ALLOW            LAN exceptions for the CONNECTORS in config/mcp-servers.mjs only, e.g. "192.168.1.50:8123".
+#                             Not per agent: any agent with WebFetch or Bash, or on an OpenAI model, could reach them too.
+#                             For agents, add devices in the chat instead (house icon): one IP:port each, per agent.
 #   AGENTS_SUBNET (172.30.0.0/24)                    change if it clashes with another network
-#   AGENTS_CPUS (1.5)  AGENTS_MEMORY (1g)  BROWSER_CPUS (2.0)  BROWSER_MEMORY (1g)
+#   SHELL_SUBNET (172.30.1.0/24)                     the command sandbox's own network; change if it clashes
+#   LAN_GATEWAY_IP (172.30.1.250)                    the LAN gateway's address on SHELL_SUBNET (change with it)
+#   SHELL_CPUS (1.0)  SHELL_MEMORY (512m)            limits for the commands agents run (each one after your OK)
+#   AGENTS_CPUS (1.5)  AGENTS_MEMORY (1g)  BROWSER_CPUS (2.0)  BROWSER_MEMORY (2g)
+#   BROWSER_MAX_AGENTS (3)  BROWSER_IDLE_MINUTES (30)  agents' browsers running at once, and when an unused one stops
+#   APPROVAL_TIMEOUT_MINUTES (30)                    how long an agent waits mid-run for your OK (then it's a no)
 #   HA_TOKEN                  example token for an MCP server in config/mcp-servers.mjs
 #   AGENTS_IMAGE / FIREWALL_IMAGE / BROWSER_IMAGE    override the published images
 #
-# Browser agent (only starts when COMPOSE_PROFILES=browser)
-#   BROWSER_SECRETS           site logins as NAME=value pairs separated by ";",
+# Browser agent (only starts when COMPOSE_PROFILES=browser, with its vault)
+#   Site logins: add them in the chat (key icon, or the form under an agent's request). They're kept
+#   encrypted in DATA_DIR/vault, which only the vault container mounts. Sites can be added there too.
+#   BROWSER_SECRETS           optional extra logins as NAME=value pairs separated by ";",
 #                             e.g. "OLX_EMAIL=me@example.com;OLX_PASSWORD=..."
-#   BROWSER_ALLOWED_ORIGINS (https://www.olx.pt)     websites it may open, separated by ";"
+#   BROWSER_ALLOWED_ORIGINS (https://www.olx.pt)     websites it may open pages on, separated by ";"
+#                             (their pages load images and scripts from anywhere, never your LAN)
 #
 # Agent and MCP server config lives in DATA_DIR/config (created with defaults on first start).
 # For https (phones need it for push notifications) put cert.pem and key.pem in DATA_DIR/config/tls.
@@ -70,6 +80,8 @@ services:
       FIREWALL: ${FIREWALL:-on}
       FIREWALL_ALLOW: ${FIREWALL_ALLOW:-}
       AGENTS_SUBNET: ${AGENTS_SUBNET:-172.30.0.0/24}
+      SHELL_SUBNET: ${SHELL_SUBNET:-172.30.1.0/24}
+      LAN_GATEWAY_IP: ${LAN_GATEWAY_IP:-172.30.1.250}   # the only container that may reach the devices you grant
     cap_drop: [ALL]
     cap_add: [NET_ADMIN, NET_RAW]
     security_opt:
@@ -95,6 +107,7 @@ services:
       CODEX_API_KEY: ${CODEX_API_KEY:-}
       CODEX_MODELS: ${CODEX_MODELS:-gpt-6.1-sol,gpt-6-astra,gpt-6.1-terra,gpt-6-luna}
       DEFAULT_MODEL: ${DEFAULT_MODEL:-sonnet}
+      APPROVAL_TIMEOUT_MINUTES: ${APPROVAL_TIMEOUT_MINUTES:-30}
       TZ: ${TZ:-UTC}
       DATA_DIR: /data
       HOME: /data/home
@@ -117,7 +130,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,exec,nosuid,size=256m
-    networks: [agents]
+    networks: [agents, shell]        # shell: to hand approved commands to the sandbox, and manage the LAN gateway
     dns: [1.1.1.1, 9.9.9.9]          # public DNS: the firewall blocks your LAN, including local resolvers
     deploy:
       resources:
@@ -129,6 +142,144 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # The command sandbox (app/shell.mjs): where an agent's terminal commands run, each one after your OK in the chat
+  # (or a command rule you set for that agent). It mounts only the agents' workspace folders and the app's public
+  # control key: no database, no logs, no config, no vault, none of the variables above. It shares its own network
+  # only with the app and the LAN gateway (the vault and the browsers aren't on it), and the firewall keeps it away
+  # from your LAN and this host, without the FIREWALL_ALLOW exceptions. Its way to your LAN is the gateway, per command.
+  shell:
+    image: ${AGENTS_IMAGE:-ghcr.io/filipeamorimdev/claude-agents:latest}
+    container_name: claude-agents-shell
+    restart: unless-stopped
+    init: true                       # reaps what a command leaves behind once it is killed
+    user: "${AGENT_UID:-1000}:${AGENT_GID:-1000}"
+    depends_on:
+      init: { condition: service_completed_successfully }
+      firewall: { condition: service_healthy }
+    command: ["node", "/app/shell.mjs"]
+    environment:
+      TZ: ${TZ:-UTC}
+      HOME: /tmp/home
+    volumes:
+      - ${DATA_DIR}/agents/workspaces:/workspaces
+      - ${DATA_DIR}/config/control.pub:/run/control.pub:ro   # checks that a command came from the app
+    <<: *hardening
+    read_only: true
+    tmpfs:
+      - /tmp:rw,exec,nosuid,size=256m
+    networks: [shell]
+    dns: [1.1.1.1, 9.9.9.9]
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"   # ping without any capability (its own network only)
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8933/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    # no "ports:": only the app reaches it, and it refuses every other caller
+    deploy:
+      resources:
+        limits:
+          cpus: "${SHELL_CPUS:-1.0}"
+          memory: ${SHELL_MEMORY:-512m}
+          pids: 128
+    logging:
+      driver: json-file
+      options: { max-size: "1m", max-file: "3" }
+
+  # The LAN gateway (app/lan.mjs): the only way an agent's command reaches your home network, and only the devices
+  # (one IP:port each) you granted that agent, read-only or full. The firewall lets only this container out, only to
+  # those. Device keys you save are encrypted in DATA_DIR/lan, which no other container mounts, and added to the
+  # agent's requests on the way out: agents never see them. SSH keys too: it runs ssh itself for `lan-ssh` and sends
+  # back only the output. It takes orders only from the app (signed calls).
+  lan:
+    image: ${AGENTS_IMAGE:-ghcr.io/filipeamorimdev/claude-agents:latest}
+    container_name: claude-agents-lan
+    restart: unless-stopped
+    user: "${AGENT_UID:-1000}:${AGENT_GID:-1000}"
+    depends_on:
+      init: { condition: service_completed_successfully }
+      firewall: { condition: service_healthy }
+    command: ["node", "/app/lan.mjs"]
+    environment:
+      TZ: ${TZ:-UTC}
+      HOME: /tmp
+      LAN_BROWSER_IP: ${LAN_BROWSER_IP:-172.30.2.10}   # the browser container: the only caller a browser grant works for
+    volumes:
+      - ${DATA_DIR}/lan:/lan
+      - ${DATA_DIR}/config/control.pub:/run/control.pub:ro
+      # from the vault: the logins you saved for a device and granted to an agent, for lan-ssh's password sign-in
+      - lan-logins:/run/lan-logins:ro
+    <<: *hardening
+    read_only: true
+    tmpfs:
+      # an SSH key only while ssh runs with it, in memory, owned by the gateway's user
+      - /tmp:rw,noexec,nosuid,size=1m,mode=0700,uid=${AGENT_UID:-1000},gid=${AGENT_GID:-1000}
+    networks:
+      shell:
+        ipv4_address: ${LAN_GATEWAY_IP:-172.30.1.250}
+      # The agents' browsers reach it here for the devices you let their browser open (internal: no way out from it)
+      browserlan:
+        ipv4_address: ${LAN_GATEWAY_BROWSER_IP:-172.30.2.250}
+    dns: [1.1.1.1, 9.9.9.9]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8934/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    # no "ports:": only the app and the sandbox reach it
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m
+          pids: 64
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  # Site logins for the browser (app/vault.mjs): encrypted in DATA_DIR/vault, which no other container mounts.
+  # The chat UI saves to it over the internal network; it answers with names only, never values.
+  # It writes the decrypted logins and the extra sites to an in-memory volume that only the browser shares.
+  vault:
+    profiles: [browser]
+    image: ${AGENTS_IMAGE:-ghcr.io/filipeamorimdev/claude-agents:latest}
+    container_name: claude-agents-vault
+    restart: unless-stopped
+    user: "${AGENT_UID:-1000}:${AGENT_GID:-1000}"
+    depends_on:
+      init: { condition: service_completed_successfully }
+    command: ["node", "/app/vault.mjs"]
+    environment:
+      TZ: ${TZ:-UTC}
+      BROWSER_SECRETS: ${BROWSER_SECRETS:-}
+      BROWSER_ALLOWED_ORIGINS: ${BROWSER_ALLOWED_ORIGINS:-https://www.olx.pt}
+    volumes:
+      - ${DATA_DIR}/vault:/vault
+      - browser-logins:/run/browser-secrets
+      - lan-logins:/run/lan-logins   # only device logins, per agent, for the LAN gateway's ssh
+    <<: *hardening
+    read_only: true
+    networks: [agents]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8932/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    # no "ports:": only reachable from claude-agents on the internal network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128m
+          pids: 32
+    logging:
+      driver: json-file
+      options: { max-size: "1m", max-file: "3" }
+
   browser-admaster:
     profiles: [browser]
     # Pinned: the entrypoint and flags below depend on this image's layout. Bump on purpose.
@@ -139,11 +290,20 @@ services:
     depends_on:
       init: { condition: service_completed_successfully }
       firewall: { condition: service_healthy }
+      vault: { condition: service_healthy }
     environment:
       HOME: /tmp
-      BROWSER_SECRETS: ${BROWSER_SECRETS:-}
+      BROWSER_ALLOWED_ORIGINS: ${BROWSER_ALLOWED_ORIGINS:-https://www.olx.pt}
+      BROWSER_MAX_AGENTS: ${BROWSER_MAX_AGENTS:-3}       # browsers running at once (one per agent)
+      BROWSER_IDLE_MINUTES: ${BROWSER_IDLE_MINUTES:-30}  # an agent's browser stops after this long unused
+      LAN_PROXY_URL: http://${LAN_GATEWAY_BROWSER_IP:-172.30.2.250}:8934  # devices you let an agent's browser open
     shm_size: 1gb
-    # Writes BROWSER_SECRETS to a dotenv file in memory, then starts the MCP server with it.
+    # Agents reach it through the guard on :8931 (app/browser/mcp-guard.mjs). The guard runs a separate
+    # browser for each agent, with its own profile (DATA_DIR/browsers/profiles/<agent>: cookies, sign-ins)
+    # and only the logins granted to that agent, and restarts it when its logins or the sites change.
+    # It also drops the tools that could expose logins. Pages open only on the allowed sites
+    # (app/browser/navigation.cjs); what they load can come from anywhere. Screenshots go to
+    # DATA_DIR/browsers/shots/<agent>. The loop below restarts the guard when the app updates it.
     entrypoint:
       - /usr/bin/tini
       - -s
@@ -151,37 +311,57 @@ services:
       - /bin/sh
       - -c
       - |
-        umask 077
-        printf '%s\n' "$$BROWSER_SECRETS" | tr ';' '\n' > /run/browser-secrets/secrets.env
-        unset BROWSER_SECRETS
-        exec node /app/cli.js "$$@"
+        stamp() { cat /guard/* 2>/dev/null | md5sum; }
+        trap 'kill $$guard 2>/dev/null; wait $$guard; exit 0' TERM INT
+        while :; do
+          last=$$(stamp)
+          node /guard/mcp-guard.mjs "$$@" &
+          guard=$$!
+          while kill -0 $$guard 2>/dev/null && [ "$$(stamp)" = "$$last" ]; do sleep 1; done
+          if kill -0 $$guard 2>/dev/null; then echo "the guard changed: restarting it and the browsers"; else echo "the guard exited, restarting"; sleep 3; fi
+          kill $$guard 2>/dev/null; wait $$guard
+        done
       - sh
+    # Options for every agent's browser; the guard adds the port, profile, logins and page rules.
     command:
       - --headless
       - --browser=chromium
       - --no-sandbox
-      - --port=8931
-      - --host=0.0.0.0
       - --allowed-hosts=*
-      - --user-data-dir=/profile
-      - --output-dir=/shots
-      - --secrets=/run/browser-secrets/secrets.env
-      - --allowed-origins=${BROWSER_ALLOWED_ORIGINS:-https://www.olx.pt}
-    tmpfs:
-      - /run/browser-secrets:size=64k,mode=0700,uid=${AGENT_UID:-1000},gid=${AGENT_GID:-1000}
+      - --shared-browser-context   # an agent's sessions share its browser: a profile can't be opened twice
     volumes:
-      - ${DATA_DIR}/browsers/admaster:/profile
-      - ${DATA_DIR}/agents/workspaces/ad-master/shots:/shots
+      - browser-logins:/run/browser-secrets:ro
+      - ${DATA_DIR}/browsers/guard:/guard:ro
+      - ${DATA_DIR}/browsers/profiles:/profiles
+      - ${DATA_DIR}/browsers/shots:/shots
     <<: *hardening
-    networks: [agents]
+    networks:
+      agents: {}
+      # Only this container and the LAN gateway: the way to the devices you let an agent's browser open
+      browserlan:
+        ipv4_address: ${LAN_BROWSER_IP:-172.30.2.10}
     dns: [1.1.1.1, 9.9.9.9]
     # no "ports:": only reachable from claude-agents on the internal network
     deploy:
       resources:
         limits:
           cpus: "${BROWSER_CPUS:-2.0}"
-          memory: ${BROWSER_MEMORY:-1g}
+          memory: ${BROWSER_MEMORY:-2g}
           pids: 512
+
+# In memory only: the decrypted logins the vault hands to the browser.
+volumes:
+  browser-logins:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=64k,mode=0700,uid=${AGENT_UID:-1000},gid=${AGENT_GID:-1000}"
+  # In memory only: the device logins (site http://IP:PORT) the vault hands to the LAN gateway, per agent.
+  lan-logins:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=64k,mode=0700,uid=${AGENT_UID:-1000},gid=${AGENT_GID:-1000}"
 
 networks:
   agents:
@@ -189,3 +369,16 @@ networks:
     ipam:
       config:
         - subnet: ${AGENTS_SUBNET:-172.30.0.0/24}
+  # Only the agents' browsers and the LAN gateway. Internal: no route out, so neither leaves through it.
+  browserlan:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: ${BROWSER_LAN_SUBNET:-172.30.2.0/24}
+  # Only the app, the command sandbox and the LAN gateway.
+  shell:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${SHELL_SUBNET:-172.30.1.0/24}
