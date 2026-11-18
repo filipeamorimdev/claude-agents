@@ -33,7 +33,7 @@
 #   HA_TOKEN                  example token for an MCP server in config/mcp-servers.mjs
 #   AGENTS_IMAGE / FIREWALL_IMAGE / BROWSER_IMAGE    override the published images
 #
-# Browser agent (only starts when COMPOSE_PROFILES=browser, with its vault)
+# Browser agent (only starts when COMPOSE_PROFILES=browser; the logins vault always runs)
 #   Site logins: add them in the chat (key icon, or the form under an agent's request). They're kept
 #   encrypted in DATA_DIR/vault, which only the vault container mounts. Sites can be added there too.
 #   BROWSER_SECRETS           optional extra logins as NAME=value pairs separated by ";",
@@ -240,11 +240,11 @@ services:
       driver: json-file
       options: { max-size: "5m", max-file: "3" }
 
-  # Site logins for the browser (app/vault.mjs): encrypted in DATA_DIR/vault, which no other container mounts.
+  # Logins (app/vault.mjs): for the browser's sites, and passwords of your devices for the LAN gateway (ssh). Always on.
+  # Encrypted in DATA_DIR/vault, which no other container mounts.
   # The chat UI saves to it over the internal network; it answers with names only, never values.
   # It writes the decrypted logins and the extra sites to an in-memory volume that only the browser shares.
   vault:
-    profiles: [browser]
     image: ${AGENTS_IMAGE:-ghcr.io/filipeamorimdev/claude-agents:latest}
     container_name: claude-agents-vault
     restart: unless-stopped

@@ -88,7 +88,8 @@ In the stack's page, the containers should show:
 | `claude-agents-init-1` | **exited** (0). It's a one-shot setup, so that's normal. |
 | `claude-agents-firewall` | **healthy**. Its logs say `using iptables-nft` or `using iptables-legacy`. |
 | `claude-agents`, `claude-agents-shell`, `claude-agents-lan` | **running**. The latter two show healthy. |
-| `claude-agents-vault`, `browser-admaster` | **running**, only with `COMPOSE_PROFILES=browser`. |
+| `claude-agents-vault` | **running** (healthy). It keeps logins: websites, and device passwords for SSH. |
+| `browser-admaster` | **running**, only with `COMPOSE_PROFILES=browser`. |
 
 Open `http://<server-ip>:8090` and sign in with `UI_PASSWORD`.
 

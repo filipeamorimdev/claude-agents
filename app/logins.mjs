@@ -75,7 +75,7 @@ export function vaultClient(url = process.env.VAULT_URL || "http://vault:8932") 
         method, headers: body ? { "Content-Type": "application/json" } : {}, body: body && JSON.stringify(body), signal: AbortSignal.timeout(5000),
       });
     } catch {
-      throw Object.assign(new Error("The vault isn't running. Start the browser agent: COMPOSE_PROFILES=browser, then docker compose up -d"), { code: 503 });
+      throw Object.assign(new Error("The vault isn't running: the human should check the claude-agents-vault container (its logs), or redeploy the stack"), { code: 503 });
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw Object.assign(new Error(data.error || `The vault answered ${res.status}`), { code: res.status < 500 ? res.status : 502 });

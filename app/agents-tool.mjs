@@ -695,7 +695,10 @@ function selfTools(ctx) {
     ["request_device_key",
       "Ask the human for the key of a device you can already reach (see network_access): an API key or token (kind \"header\") that the gateway adds " +
       "to your requests, or an SSH key (kind \"ssh\", needs full access) that the gateway keeps and signs in with. They give it in the chat; this waits. " +
-      "You never see the key. Use it when a device answers 401/403, or before ssh.",
+      "You never see the key. Use it when a device answers 401/403, or before ssh. " +
+      "SSH with a password instead of a key also works: the password is a vault login whose site is that device " +
+      "(e.g. http://192.168.1.1:22), granted to you. Ask for it with request_login if you have it, otherwise ask the human to add it " +
+      "in the chat (key icon) and grant it to you. Then: lan-ssh -l <user> --login <NAME> <device> <command>.",
       {
         target: z.string().max(60).describe('The device: its target name from network_access, or "IP:port"'),
         kind: z.enum(["header", "ssh"]).describe('"header" for an API key or token, "ssh" for an SSH key'),
