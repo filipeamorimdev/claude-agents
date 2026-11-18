@@ -37,8 +37,7 @@ On the server Portainer manages, from a checkout of this repo:
 sudo bash scripts/portainer.sh
 ```
 
-It asks for your Claude token, a Portainer access token (or your Portainer login), and a GitHub token
-with `read:packages` while the images are private. It works out everything else: the system user and its
+It asks for your Claude token and a Portainer access token (or your Portainer login). It works out everything else: the system user and its
 uid/gid, the timezone, a free port, free subnets, a chat password, and which Portainer environment is this
 host. It also checks that the images on GHCR match this `compose.yaml` (if they don't, push to `main` and
 wait for the `images` workflow). Then it creates the stack in Portainer, runs the safeguard checks, and prints
@@ -70,9 +69,7 @@ Step by step in Portainer's own screens (stack kept in sync with this repo), Tru
 
    Everything else has a default; the full list is at the top of `compose.yaml`.
    Write a `$` in a value as `$$`.
-4. Deploy. The images come from GHCR: while the packages are private, the UI needs a login for
-   `ghcr.io` (a GitHub token with `read:packages`). In Portainer: Registries → Add registry → Custom registry.
-   With the CLI: `docker login ghcr.io` on the server once.
+4. Deploy. The images are public on GHCR, so no registry login is needed.
 5. Check the safeguards: copy [`scripts/verify.sh`](scripts/verify.sh) to the server and run
    `sudo bash verify.sh`. Every line should be ✓, including "LAN host … blocked".
 
@@ -85,7 +82,6 @@ Add its site logins in the chat (key icon), or wait for it to ask: see [Site log
 
 ### Option B: command line
 
-The repo is private: accept the GitHub invite and sign in to GitHub on the server first (`gh auth login`).
 
 ```bash
 git clone https://github.com/filipeamorimdev/claude-agents.git

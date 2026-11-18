@@ -6,11 +6,12 @@ as a TrueNAS app) are marked as such. Prefer a script? `sudo bash scripts/portai
 
 ## 0. Before you start
 
-- **The images must match the code.** Portainer pulls `ghcr.io/filipeamorimdev/claude-agents:latest`, which
-  GitHub builds on every push to `main`. Push your changes, then wait for the **images** workflow to go green
-  (repo → Actions). The firewall image, `claude-agents-firewall`, is built by the same workflow.
+- **The images must match the code.** Portainer pulls `ghcr.io/filipeamorimdev/claude-agents:latest` and
+  `claude-agents-firewall:latest`. GitHub builds both on every push to `main`. After a push, wait for the
+  **images** workflow to go green (repo → Actions) before deploying.
 - **A Claude token** from `claude setup-token` (`sk-ant-oat01-…`), or an API key, or a ChatGPT plan
   (see [Use your ChatGPT plan](../README.md#use-your-chatgpt-plan)).
+- **No GitHub login needed.** The repo and both images are public, so Portainer needs no tokens and no registry.
 
 ## 1. A folder for the data
 
@@ -30,27 +31,7 @@ The stack keeps everything (database, workspaces, logs, logins, config) in one f
 
 You don't set any folder permissions yourself: the stack's `init` step does that on every start.
 
-## 3. GitHub tokens (only while the repo and images are private)
-
-Portainer needs to read two private things on GitHub:
-
-| For | Token | Where to make it |
-|---|---|---|
-| the images (ghcr.io) | classic token, scope `read:packages` only | github.com → Settings → Developer settings → Personal access tokens → Tokens (classic) |
-| the repo (compose.yaml) | fine-grained token, this repo only, **Contents: Read-only** | same place → Fine-grained tokens |
-
-If you make both packages public instead, you don't need the first token or step 4: github.com → your profile →
-Packages → `claude-agents` → Package settings → Change visibility. Do the same for `claude-agents-firewall`.
-
-## 4. Let Portainer pull the images
-
-Portainer → **Registries** (under Administration in the left menu) → **Add registry** → **Custom registry**:
-
-- Name: `GHCR`
-- Registry URL: `ghcr.io`
-- Authentication: on. Username: your GitHub username. Password: the `read:packages` token.
-
-## 5. Create the stack
+## 3. Create the stack
 
 Portainer → your environment (**local**) → **Stacks** → **Add stack**:
 
@@ -60,8 +41,7 @@ Portainer → your environment (**local**) → **Stacks** → **Add stack**:
    - Repository URL: `https://github.com/filipeamorimdev/claude-agents`
    - Repository reference: `refs/heads/main`
    - Compose path: `compose.yaml`
-   - Authentication: on. Username: your GitHub username. Personal access token: the fine-grained token
-     (if it offers to save the credential, do: updates need it).
+   - Authentication: off (the repo is public).
    - **GitOps updates: off.** Portainer would redeploy as soon as you push, before GitHub has finished
      building the new images, and start the new compose with the old images.
 3. **Environment variables** → **Advanced mode**, and paste (fill in yours):
@@ -99,7 +79,7 @@ Portainer → your environment (**local**) → **Stacks** → **Add stack**:
   LAN_BROWSER_IP=172.31.2.10
   ```
 
-## 6. Check it
+## 4. Check it
 
 In the stack's page, the containers should show:
 
@@ -121,7 +101,7 @@ sudo bash verify.sh
 Copy [`scripts/verify.sh`](../scripts/verify.sh) to the host first. Every line should be ✓, including
 "LAN host … blocked".
 
-## 7. One-time commands, from Portainer
+## 5. One-time commands, from Portainer
 
 Containers → `claude-agents` → **Console** → Connect (`/bin/sh`):
 
