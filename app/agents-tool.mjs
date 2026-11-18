@@ -438,7 +438,8 @@ export function makeSelfHandlers(ctx) {
         if (!t.ssh && !(names.length && (t.port === 22 || t.mode === "full"))) return undefined;
         if (t.mode !== "full") return "needs full access, which you don't have";
         return { ...(t.ssh ? { as_user: t.ssh.user, run: `lan-ssh ${t.id} <command>` } : {}),
-          ...(names.length ? { vault_logins: names, run_with_password: `lan-ssh -l <user> --login ${names[0]} ${t.id} <command>` } : {}) };
+          ...(names.length ? { vault_logins: names, run_with_password: `lan-ssh -l <user> --login ${names[0]} ${t.id} <command>`,
+            run_as_root: `lan-ssh ${t.ssh ? "" : `-l <user> --login ${names[0]} `}--sudo ${names[0]} ${t.id} <command>` } : {}) };
       };
       return text(JSON.stringify({
         your_network_targets: targets.map((t) => ({ name: t.name, address: `${t.host}:${t.port}`, access: t.mode === "full" ? "full" : "read-only (GET, HEAD, OPTIONS)",
@@ -453,6 +454,8 @@ export function makeSelfHandlers(ctx) {
           "Read-only targets take GET, HEAD and OPTIONS only. Full targets also take other methods, and tunnels (lan curl https://...).",
           "SSH: for a target with ssh listed, run `lan-ssh <name> <command>`, e.g. lan-ssh router uptime. The gateway signs in with a key it keeps; you never have or need a key or a password. " +
             "Where ssh lists vault_logins, the gateway can sign in with that saved password instead: `lan-ssh -l <user> --login <NAME> <name> <command>` (the user on the device, e.g. admin; the password stays in the gateway). " +
+            "For a command that needs root, add `--sudo <NAME>` (a vault login of that device holding the sudo password of the user you sign in as, often the same NAME as --login) " +
+            "and leave sudo out of the command: the gateway runs it with sudo and types the password into sudo's prompt. " +
             "Don't put shell operators in the remote command (; && | quotes): run one plain command per call. For a target without ssh, call request_device_key with kind \"ssh\", " +
             "or ask the human to save the device's password in the vault (its site: http://IP:PORT of that device) and grant it to you.",
           "Anything not listed here is unreachable. If you need another device, call request_network_access with its IP, port and why: the human approves it in the chat.",
@@ -704,7 +707,8 @@ function selfTools(ctx) {
       "You never see the key. Use it when a device answers 401/403, or before ssh. " +
       "SSH with a password instead of a key also works: the password is a vault login whose site is that device " +
       "(e.g. http://192.168.1.1:22), granted to you. Ask for it with request_login if you have it, otherwise ask the human to add it " +
-      "in the chat (key icon) and grant it to you. Then: lan-ssh -l <user> --login <NAME> <device> <command>.",
+      "in the chat (key icon) and grant it to you. Then: lan-ssh -l <user> --login <NAME> <device> <command>. " +
+      "The same kind of login also answers sudo: lan-ssh --sudo <NAME> <device> <command> runs the command as root.",
       {
         target: z.string().max(60).describe('The device: its target name from network_access, or "IP:port"'),
         kind: z.enum(["header", "ssh"]).describe('"header" for an API key or token, "ssh" for an SSH key'),

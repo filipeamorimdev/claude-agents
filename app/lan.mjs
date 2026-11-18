@@ -20,7 +20,8 @@
 //     is pinned on first use (DATA_DIR/lan/known_hosts/<target>); a changed host key fails until you reset the key.
 //     Or a password from the vault: a login whose site is that device (same IP) and that you granted to the agent there.
 //     The vault hands this gateway only those (an in-memory folder, LAN_LOGINS_DIR/<agent>.json); ssh gets the password
-//     from lan-askpass here, so it never reaches the agent either
+//     from lan-askpass here, so it never reaches the agent either. `lan-ssh --sudo NAME` runs the command with sudo on
+//     the device, and this gateway types such a login into sudo's prompt (sudo -S), once, only when sudo asks
 //   - an agent's browser: for each grant you also tick whether its browser may open that device. The browser container
 //     reaches this gateway on a network of its own (internal, only the two of them: LAN_BROWSER_IP), and the guard there
 //     sends only the private addresses its agent was given here (browser/mcp-guard.mjs). Same modes: read-only is GET,
@@ -239,29 +240,53 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 
   /**
    * Runs one command on a target over ssh, with its key or, given `password` ({ user, value }), a vault password.
-   * Resolves { exitCode, output, timedOut, seconds }.
+   * Given `sudo` ({ value }), runs it with sudo on the device and answers sudo's password prompt with that value.
+   * Resolves { exitCode, output, timedOut, seconds, sudoAsked }.
    */
-  const runSsh = (target, command, seconds, password = null) => password
-    ? sshProcess(target, command, seconds, ["-l", password.user, "-o", "BatchMode=no", "-o", "PubkeyAuthentication=no",
-      "-o", "PreferredAuthentications=password,keyboard-interactive", "-o", "NumberOfPasswordPrompts=1"],
-    // ssh asks lan-askpass, which prints this; there's no terminal and nothing else to ask (host keys: accept-new)
-    { SSH_ASKPASS: ASKPASS, SSH_ASKPASS_REQUIRE: "force", DISPLAY: ":0", LAN_SSH_PASSWORD: password.value })
-    : withKeyFile(unseal(`${target.id}:ssh`, target.ssh.sealed), (keyFile) => sshProcess(target, command, seconds,
-      ["-i", keyFile, "-l", target.ssh.user, "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes"]));
-  const sshProcess = (target, command, seconds, auth, extraEnv = {}) => new Promise((resolve) => {
+  const runSsh = (target, command, seconds, password = null, sudo = null) => {
+    if (sudo) {
+      // A prompt nobody can guess, so the value goes to sudo's own prompt and nowhere else. -k: sudo always asks (a
+      // cached sudo session would otherwise leave the value unread on stdin); the command itself gets /dev/null.
+      sudo = { ...sudo, prompt: `[lan-ssh sudo ${crypto.randomBytes(8).toString("hex")}]` };
+      command = `sudo -k -S -p '${sudo.prompt}' -- sh -c ${shQuote(`exec </dev/null; ${command}`)}`;
+    }
+    return password
+      ? sshProcess(target, command, seconds, ["-l", password.user, "-o", "BatchMode=no", "-o", "PubkeyAuthentication=no",
+        "-o", "PreferredAuthentications=password,keyboard-interactive", "-o", "NumberOfPasswordPrompts=1"],
+      // ssh asks lan-askpass, which prints this; there's no terminal and nothing else to ask (host keys: accept-new)
+      { SSH_ASKPASS: ASKPASS, SSH_ASKPASS_REQUIRE: "force", DISPLAY: ":0", LAN_SSH_PASSWORD: password.value }, sudo)
+      : withKeyFile(unseal(`${target.id}:ssh`, target.ssh.sealed), (keyFile) => sshProcess(target, command, seconds,
+        ["-i", keyFile, "-l", target.ssh.user, "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes"], {}, sudo));
+  };
+  const shQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
+  const sshProcess = (target, command, seconds, auth, extraEnv = {}, sudo = null) => new Promise((resolve) => {
     const started = Date.now();
     const child = spawn("ssh", ["-F", "/dev/null", "-p", String(target.port), ...auth,
       "-o", "StrictHostKeyChecking=accept-new", "-o", `UserKnownHostsFile=${knownHosts(target.id)}`,
       "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "LogLevel=ERROR", "-T", target.host, "--", command],
-    { stdio: ["ignore", "pipe", "pipe"], env: { ...sshEnv, ...extraEnv }, detached: true }); // detached: no terminal to ask on
+    { stdio: [sudo ? "pipe" : "ignore", "pipe", "pipe"], env: { ...sshEnv, ...extraEnv }, detached: true }); // detached: no terminal to ask on
     let out = Buffer.alloc(0), dropped = 0, timedOut = false;
     const keep = (c) => { const room = SSH_OUTPUT_MAX - out.length; if (room > 0) out = Buffer.concat([out, c.subarray(0, room)]); dropped += Math.max(0, c.length - room); };
     child.stdout.on("data", keep); child.stderr.on("data", keep);
+    // sudo -S writes its prompt to stderr: the value is sent once, when it asks, and stdin closes with it. Never on a
+    // second ask (a command running as root could print the prompt itself to fish for it). No ask (NOPASSWD): never sent.
+    let sudoAsked = false, tail = "";
+    if (sudo) {
+      child.stdin.on("error", () => {}); // the device may close it first
+      child.stderr.on("data", (c) => {
+        if (sudoAsked) return;
+        const s = tail + c.toString("latin1");
+        if (s.includes(sudo.prompt)) { sudoAsked = true; child.stdin.end(`${sudo.value}\n`); }
+        tail = s.slice(-sudo.prompt.length);
+      });
+    }
     const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, seconds * 1000);
     child.on("error", (e) => { clearTimeout(timer); resolve({ exitCode: 255, output: `lan-ssh: can't run ssh here: ${e.message}`, timedOut, seconds: 0 }); });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ exitCode: code ?? 255, output: out.toString("utf8") + (dropped ? `\n… (${dropped} bytes left out)` : ""), timedOut, seconds: Math.round((Date.now() - started) / 100) / 10 });
+      const text = out.toString("utf8");
+      resolve({ exitCode: code ?? 255, output: (sudo ? text.split(sudo.prompt).join("") : text) + (dropped ? `\n… (${dropped} bytes left out)` : ""),
+        timedOut, seconds: Math.round((Date.now() - started) / 100) / 10, sudoAsked });
     });
   });
   /** The targets an agent may reach now, with its mode on each. */
@@ -481,10 +506,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
 
   /**
-   * POST /ssh from `lan-ssh` in a command: { target: id | IP | IP:port, command, user?, login? }. Only with the command's
-   * token, only a target of its agent with full access, and an SSH key or a vault login for that device granted to the
-   * agent (`login` names it; without one, the key, else the only such login). Runs ssh here; the answer is the output,
-   * never the key or the password.
+   * POST /ssh from `lan-ssh` in a command: { target: id | IP | IP:port, command, user?, login?, sudo? }. Only with the
+   * command's token, only a target of its agent with full access, and an SSH key or a vault login for that device granted
+   * to the agent (`login` names it; without one, the key, else the only such login). `sudo` names a vault login for that
+   * device too: the command runs with sudo there, and the gateway answers sudo's prompt with it. Runs ssh here; the
+   * answer is the output, never the key or a password.
    */
   async function sshCommand(req, res) {
     const t = who(req);
@@ -493,9 +519,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     let body;
     try { body = JSON.parse(await readRaw(req, 16 * 1024) || "{}"); } catch { return send(res, 400, { error: "invalid request" }); }
     const want = String(body.target ?? "").trim(), command = String(body.command ?? "");
-    const loginName = String(body.login ?? "").trim(), userWanted = String(body.user ?? "").trim();
+    const loginName = String(body.login ?? "").trim(), userWanted = String(body.user ?? "").trim(), sudoName = String(body.sudo ?? "").trim();
     if (!command.trim() || command.length > SSH_COMMAND_MAX) return send(res, 400, { error: `a command is 1 to ${SSH_COMMAND_MAX} characters` });
     if (loginName && !LOGIN_RE.test(loginName)) return send(res, 400, { error: "--login takes a login's NAME, e.g. ROUTER_PASSWORD" });
+    if (sudoName && !LOGIN_RE.test(sudoName)) return send(res, 400, { error: "--sudo takes a login's NAME, e.g. ROUTER_PASSWORD" });
     if (userWanted && !SSH_USER_RE.test(userWanted)) return send(res, 400, { error: "-l takes a user name, e.g. admin" });
     const all = reach(t.agent, t.cap);
     const target = all.find((x) => x.id === want || `${x.host}:${x.port}` === want)
@@ -519,17 +546,37 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       if (!user) return send(res, 400, { error: `Say which user to sign in as with the password: lan-ssh -l <user> --login ${login.name} ${target.id} <command>` });
       password = { user, name: login.name, value: login.value };
     }
+    // sudo's password: a vault login for this device granted to the agent, asked for by name (often the same as --login).
+    let sudo = null;
+    if (sudoName) {
+      const login = deviceLogins(t.agent, target.host).find((l) => l.name === sudoName);
+      if (!login) {
+        log(`${t.agent}: refused sudo on ${target.id} with ${sudoName} (not a login of ${target.host} granted to it)`);
+        return send(res, 403, { error: `${sudoName} isn't a vault login for ${target.host} that ${t.agent} may use. ` +
+          `Its site in the vault must be this device (http://${target.host}:…), and the human grants it to you there` });
+      }
+      sudo = { name: login.name, value: login.value };
+    }
+    const signedInAs = password ? password.user : target.ssh.user;
     const seconds = Math.max(1, Math.min(SSH_TIMEOUT_MAX, Math.floor((t.expires - Date.now()) / 1000) - 5));
-    const r = await runSsh(target, command, seconds, password);
+    const r = await runSsh(target, command, seconds, password, sudo);
+    const sudoAsked = r.sudoAsked; delete r.sudoAsked;
     if (password && r.exitCode === 255 && /Permission denied/.test(r.output)) {
       r.output = `${r.output}\nlan-ssh: ${target.name} refused ${password.user} with the password in ${password.name}. Don't retry: tell the human ` +
         "(the user, or the saved password, may be wrong; ssh may also be set to keys only on the device).\n";
+    }
+    if (sudo && r.exitCode === 127 && /sudo: (command )?not found|sudo: No such file/.test(r.output)) {
+      r.output = `${r.output}\nlan-ssh: ${target.name} has no sudo. Don't retry with --sudo: tell the human ` +
+        "(if root may sign in over ssh, they can save root's password in the vault for this device: lan-ssh -l root --login NAME …).\n";
+    } else if (sudo && r.exitCode === 1 && /incorrect password|Sorry, try again|no password was provided|is not in the sudoers|not allowed to (run|execute)|may not run sudo/.test(r.output)) {
+      r.output = `${r.output}\nlan-ssh: sudo on ${target.name} refused ${signedInAs}${sudoAsked ? ` with the password in ${sudo.name}` : ""}. Don't retry: tell the human ` +
+        `(the saved password may be wrong, or ${signedInAs} may not be allowed to use sudo there).\n`;
     }
     if (r.exitCode === 255 && /Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/.test(r.output)) {
       r.output = `${r.output}\nlan-ssh: ${target.name} answered with a different host key than the first time. Don't retry: tell the human. ` +
         "If they changed the device, they tap \"Trust its new host key\" for it in your details (What it can reach).\n";
     }
-    log(`${t.agent}: ssh ${target.id} as ${password ? `${password.user} (password ${password.name})` : target.ssh.user}: ${command.replace(/\s+/g, " ").slice(0, 200)} → ${r.timedOut ? "timed out" : `exit ${r.exitCode}`} (${r.seconds}s)`);
+    log(`${t.agent}: ssh ${target.id} as ${password ? `${password.user} (password ${password.name})` : target.ssh.user}${sudo ? ` with sudo (password ${sudo.name})` : ""}: ${command.replace(/\s+/g, " ").slice(0, 200)} → ${r.timedOut ? "timed out" : `exit ${r.exitCode}`} (${r.seconds}s)`);
     send(res, 200, r);
   }
 

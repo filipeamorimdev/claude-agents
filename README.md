@@ -366,6 +366,12 @@ device's host key is trusted the first time and checked after that. Every ssh co
 `docker logs claude-agents-lan`. A "starts with" rule such as `lan-ssh router nvram get` only matches when plain
 words follow it, so `nvram get 'x; reboot'` still asks you.
 
+**sudo**: save the user's password in the vault as a login for that device (site `http://IP:22`) and grant it to
+the agent; `lan-ssh --sudo PI_PASSWORD pi apt-get update` then runs the command with sudo there. The gateway types
+the password into sudo's prompt, once and only when sudo asks, so the agent never sees it. It works with a key or a
+vault password for signing in (`-l admin --login PI_PASSWORD --sudo PI_PASSWORD …`). The real root password (`su`)
+isn't supported: if root may sign in over ssh, use `-l root --login ROOT_PASSWORD` instead.
+
 How it's fenced: only the LAN gateway (`claude-agents-lan`) may leave for your network, and the firewall opens
 it to exactly the IP:port pairs granted to some agent (within seconds of a change, closed again when you take a
 grant away). The sandbox and the app can't reach them directly. Each command that may use the network gets a
