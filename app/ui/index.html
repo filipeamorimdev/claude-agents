@@ -329,6 +329,8 @@ body.resizing .dock, body.resizing .main { pointer-events: none; }
 .mem-row:first-child { border-top: 0; }
 .mem-row .by { color: var(--muted); font-size: 12px; }
 .mem-row .row-actions { display: flex; gap: 6px; }
+/* a saved command can be a whole script: keep its lines, wrap long ones, and cap its height */
+.rule-pattern { display: block; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 8.5em; overflow-y: auto; }
 .inline-add { display: flex; gap: 8px; margin-top: 8px; }
 .inline-add select.field { width: auto; flex: 0 0 auto; }
 .grants select { border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; background: var(--surface-2); color: var(--ink); font-size: 13px; }
@@ -1041,7 +1043,7 @@ const ACTION_DONE = { allowed: "✓ Allowed", denied: "Declined", expired: "No a
 function actionCard(r, { withAgent = false } = {}) {
   if (r.tool === "LAN_KEY") return deviceKeyCard(r, { withAgent });
   const who = labelOf(r.agent), open = r.status === "open";
-  const command = r.kind === "tool" && r.tool === "Shell"; // a terminal command: approved one by one, never "always"
+  const command = r.kind === "tool" && r.tool === "Shell"; // a terminal command: "always" saves an exact rule for this text
   const network = r.kind === "approval" && r.tool === "LAN"; // request_network_access: a device on your network
   const privateData = r.kind === "approval" && r.tool === "PRIVATE"; // request_private_data: override rule zero, once
   const title = r.kind === "takeover" ? `${who} needs you in its browser` : command ? `${who} wants to run a command` : network ? `${who} wants to reach a device on your network`
@@ -1683,7 +1685,7 @@ async function openDrawer(name) {
   // Commands it may run without asking (none by default), and what it may reach on your network.
   const LAN_RULE = { none: "No network access", read: "Network: read-only", full: "Network: full" };
   const ruleRow = (r) => h("div", { class: "mem-row" },
-    h("div", {}, h("code", {}, r.pattern), h("div", { class: "by" }, `${r.kind === "exact" ? "Exactly this" : "Anything starting with this"} · ${LAN_RULE[r.lan]} · #${r.id}${r.note ? ` · ${r.note}` : ""}`)),
+    h("div", { style: "min-width: 0" }, h("code", { class: "rule-pattern" }, r.pattern), h("div", { class: "by" }, `${r.kind === "exact" ? "Exactly this" : "Anything starting with this"} · ${LAN_RULE[r.lan]} · #${r.id}${r.note ? ` · ${r.note}` : ""}`)),
     h("button", { class: "btn sm danger", onclick: () => change(() => api("DELETE", `/api/command-rules/${r.id}`), "Rule removed: it asks again") }, "Remove"));
   const rulePattern = h("input", { class: "field", maxlength: "2000", spellcheck: "false", autocomplete: "off", placeholder: "e.g. df -h, or lan curl -s http://192.168.1.50:8123/api/",
     onkeydown: (e) => { if (e.key === "Enter") addRule(); } });

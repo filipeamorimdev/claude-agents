@@ -11,10 +11,11 @@
 // folder (no "..", "~", absolute paths outside it or globs that climb out). Anything else still asks: a command that writes, deletes or
 // installs, anything that reaches the network or your devices (curl, lan, ssh), git, sed, awk, scripts.
 //
-// A command is auto-approved only when it is plain: no ; & > < ( ) newline, no $ or ` outside single quotes
-// (so no chaining, redirects, subshells or substitutions), and what follows a prefix rule is plain words only: no
-// quotes, backslashes or globs (PLAIN_REST). A pipeline (a | b | c) is auto-approved only when
-// every part matches a rule; its LAN access is the least any of its prefix rules gives. Anything else asks you.
+// A command is auto-approved when an exact rule is that whole command, character for character (any command: a
+// script with ; | $(...) too, e.g. from "Always allow this command"), or when it is plain: no ; & > < ( ) newline,
+// no $ or ` outside single quotes (so no chaining, redirects, subshells or substitutions), and what follows a prefix
+// rule is plain words only: no quotes, backslashes or globs (PLAIN_REST). A pipeline (a | b | c) is auto-approved only
+// when every part matches a rule; its LAN access is the least any of its prefix rules gives. Anything else asks you.
 // Some commands never run without you, whatever the rules say: anything that mentions the log, the database,
 // the agents CLI or purging. Auto-approved commands are logged like any other, marked with the rule that let them run.
 
@@ -56,12 +57,16 @@ export function pipelineParts(cmd) {
 /** Validate a rule from the UI or CLI. Returns { errors, rule }. */
 export function validateRule({ kind = "exact", pattern = "", lan = "none", note = "" } = {}) {
   const errors = [];
-  const p = String(pattern ?? "").trim().replace(/\s+/g, " ");
+  const raw = String(pattern ?? "").trim();
+  const plain = pipelineParts(raw)?.length === 1;
+  // An exact rule for anything but one plain command (a script, a pipeline, $(...)) is kept as typed, and matches only
+  // that text, character for character (see autoApproval).
+  const p = plain || kind !== "exact" ? raw.replace(/\s+/g, " ") : raw;
   if (!RULE_KINDS.includes(kind)) errors.push('kind: "exact" or "prefix"');
   if (!RULE_LAN.includes(lan)) errors.push('lan: "none", "read" or "full"');
   if (!p) errors.push("pattern: the command (or its start)");
   else if (p.length > PATTERN_MAX) errors.push(`pattern: at most ${PATTERN_MAX} characters`);
-  else if (pipelineParts(p)?.length !== 1) errors.push("pattern: one plain command, without ; & | > < $ ` ( ) or line breaks");
+  else if (kind === "prefix" && !plain) errors.push("pattern: a \"starts with\" rule is one plain command, without ; & | > < $ ` ( ) or line breaks (an exact rule can be anything)");
   else if (NEVER.test(p)) errors.push("pattern: commands about the log, the database, the agents CLI or purging always need your OK");
   else if (kind === "prefix" && p.length < 2) errors.push("pattern: a prefix of at least 2 characters");
   return { errors, rule: { kind, pattern: p, lan, note: String(note ?? "").replace(/\s+/g, " ").trim().slice(0, 200) } };
@@ -155,6 +160,9 @@ const matches = (rule, part) => rule.kind === "exact" ? part === rule.pattern
  */
 export function autoApproval(rules, cmd) {
   if (!rules?.length || NEVER.test(String(cmd ?? ""))) return null;
+  // An exact rule matching the whole command as typed: it runs only the text you approved, whatever it holds.
+  const whole = rules.find((r) => r.kind === "exact" && r.pattern === String(cmd).trim());
+  if (whole) return { rules: [whole.id], lan: whole.lan };
   const parts = pipelineParts(String(cmd).trim());
   if (!parts) return null;
   const used = [];
