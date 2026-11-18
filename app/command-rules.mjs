@@ -6,6 +6,11 @@
 //   lan     what an auto-approved command may reach on your network: "none" (default), "read" (GET only) or "full",
 //           never more than the targets you granted the agent (lan.mjs)
 //
+// Read-only commands (also off by default, a switch per agent): with it on, a command that only reads runs without
+// asking, no rule needed: ls, cat, grep, find, jq, wc... (READ_ONLY below), with no network at all, only in its own
+// folder (no "..", "~", absolute paths outside it or globs that climb out). Anything else still asks: a command that writes, deletes or
+// installs, anything that reaches the network or your devices (curl, lan, ssh), git, sed, awk, scripts.
+//
 // A command is auto-approved only when it is plain: no ; & > < ( ) newline, no $ or ` outside single quotes
 // (so no chaining, redirects, subshells or substitutions), and what follows a prefix rule is plain words only: no
 // quotes, backslashes or globs (PLAIN_REST). A pipeline (a | b | c) is auto-approved only when
@@ -15,8 +20,6 @@
 
 export const RULE_KINDS = ["exact", "prefix"];
 export const RULE_LAN = ["none", "read", "full"];
-export const RULES_MAX = 50;
-export const AUTO_PER_HOUR = 60;
 // As long as a command may be (COMMAND_MAX in shell.mjs), so "Always allow" works on any command an agent can run.
 export const PATTERN_MAX = 2000;
 
@@ -62,6 +65,76 @@ export function validateRule({ kind = "exact", pattern = "", lan = "none", note 
   else if (NEVER.test(p)) errors.push("pattern: commands about the log, the database, the agents CLI or purging always need your OK");
   else if (kind === "prefix" && p.length < 2) errors.push("pattern: a prefix of at least 2 characters");
   return { errors, rule: { kind, pattern: p, lan, note: String(note ?? "").replace(/\s+/g, " ").trim().slice(0, 200) } };
+}
+
+// Commands that only read and print. Each maps to a check of its arguments (words, unquoted): false = not read-only.
+// Left out on purpose: anything that can write a file or run another program from its arguments or config
+// (sed -i / w, awk system(), git hooks and pager, env CMD, xargs, tee, curl -o...), and anything that reaches a network.
+const noOpt = (...bad) => (w) => !w.some((x) => bad.some((b) => x === b || x.startsWith(`${b}=`) || (b.length === 2 && !b.startsWith("--") && x.startsWith(b))));
+const any = () => true;
+const READ_ONLY = {
+  ls: any, cat: any, head: any, tail: any, wc: any, stat: any, du: any, df: any, pwd: any, echo: any, printf: any,
+  whoami: any, id: any, uname: any, printenv: any, which: any, cut: any, tr: any, nl: any, column: any, basename: any,
+  dirname: any, realpath: any, readlink: any, md5sum: any, sha1sum: any, sha256sum: any, sha512sum: any, cksum: any,
+  cmp: any, diff: any, comm: any, grep: any, egrep: any, fgrep: any, jq: any, rev: any, fold: any, paste: any,
+  join: any, tac: any, od: any, hexdump: any, seq: any, true: any, false: any, uptime: any, free: any, ps: any,
+  date: noOpt("-s", "--set"),
+  file: noOpt("-C", "--compile"),
+  tree: noOpt("-o"),
+  sort: noOpt("-o", "--output", "--compress-program"),
+  rg: noOpt("--pre"),
+  find: (w) => !w.some((x) => /^-(exec|execdir|ok|okdir|delete|fprint|fprint0|fprintf|fls)$/.test(x)),
+  uniq: (w) => w.filter((x) => !x.startsWith("-")).length <= 1, // a second name is a file it writes
+  hostname: (w) => w.every((x) => x.startsWith("-") && !/^-(F|-file|b|-boot)/.test(x)),
+  env: (w) => w.length === 0, // env CMD runs CMD
+};
+/**
+ * Shell words of one plain command, quotes removed (pipelineParts already refused $ ` ; & > < { } and the rest).
+ * glob: the word has an unquoted * ? or [, which the shell expands into names.
+ */
+function words(part) {
+  const out = []; let cur = null, q = null;
+  for (let i = 0; i < part.length; i++) {
+    const c = part[i];
+    if (q) { if (c === q) q = null; else cur.text += c; continue; }
+    cur ??= { text: "", glob: false };
+    if (c === "'" || c === '"') { q = c; continue; }
+    if (c === "\\") { cur.text += part[++i] ?? ""; continue; }
+    if (c === " ") { if (cur.text || part[i - 1] === "'" || part[i - 1] === '"') out.push(cur); cur = null; continue; }
+    if ("*?[".includes(c)) cur.glob = true;
+    cur.text += c;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+// The paths a word may name: itself, what follows = (--file=x), what follows a one-letter option (-fx).
+const pathsOf = (w) => [w, ...(w.includes("=") ? [w.slice(w.indexOf("=") + 1)] : []), ...(/^-[A-Za-z]./.test(w) ? [w.slice(2)] : [])];
+/** Whether a path stays in the agent's own folder (or /tmp): relative, no .., no ~, no glob that could climb out. */
+function staysHome(p, glob, home) {
+  if (p.startsWith("~")) return false;
+  if (p.split("/").includes("..")) return false;
+  if (p.startsWith("/") && !(p === home || p.startsWith(`${home}/`) || p === "/tmp" || p.startsWith("/tmp/"))) return false;
+  // A glob is expanded by the shell: "*.txt" is fine, ".?" is "..", "/w*/x" is anywhere.
+  if (glob && (p.includes("/") || p.startsWith("."))) return false;
+  return true;
+}
+/**
+ * Whether a command only reads, inside the agent's own folder: every part of the pipeline is a READ_ONLY command whose
+ * arguments pass its check, and no word points outside its folder (.., ~, an absolute path elsewhere, a climbing glob).
+ * workspaces: where the agents' folders are in the command sandbox (shell.mjs).
+ */
+export function isReadOnly(cmd, agent, workspaces = "/workspaces") {
+  const s = String(cmd ?? "").trim();
+  if (!s || NEVER.test(s)) return false;
+  const parts = pipelineParts(s);
+  if (!parts) return false;
+  const home = `${workspaces}/${agent}`;
+  return parts.every((part) => {
+    const ws = words(part);
+    const [name, ...rest] = ws.map((w) => w.text);
+    const check = Object.hasOwn(READ_ONLY, name ?? "") ? READ_ONLY[name] : null;
+    return Boolean(check && !ws[0].glob && check(rest) && ws.slice(1).every((w) => pathsOf(w.text).every((p) => staysHome(p, w.glob, home))));
+  });
 }
 
 const LAN_ORDER = { none: 0, read: 1, full: 2 };

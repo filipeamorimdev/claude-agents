@@ -372,21 +372,24 @@ export function makeSelfHandlers(ctx) {
       if (ctx.lan) { try { targets = await ctx.lan.forAgent(caller); } catch { targets = []; } }
       const reachLine = (list) => list.length ? list.map((t) => `${t.name} ${t.host}:${t.port} (${t.mode === "full" ? "full" : "read-only"})`).join(", ") : "nothing";
       const auto = store.autoApprove(caller, cmd);
-      const byRule = auto && !auto.capped ? auto : null;
+      const byRule = auto;
       const lanCap = byRule ? byRule.lan : "full";
       const lanNote = targets.length
-        ? (lanCap === "none" ? "none (the rule that lets it run gives no LAN access)" : `${reachLine(targets.map((t) => ({ ...t, mode: lanCap === "read" ? "read" : t.mode })))}, with \`lan <command>\``)
+        ? (lanCap === "none" ? "none (what lets it run without asking gives no LAN access)" : `${reachLine(targets.map((t) => ({ ...t, mode: lanCap === "read" ? "read" : t.mode })))}, with \`lan <command>\``)
         : "none";
       const header = `Command:\n${cmd}\n\nWhy: ${why}\nAgent: ${caller}\nWhere: the command sandbox, in ${caller}'s folder, for at most ${seconds}s\nYour network: ${lanNote}`;
       let answered, by;
-      if (byRule) {
+      if (byRule?.readOnly) {
+        answered = `auto-approved as read-only (the human lets ${caller} run read-only commands without asking), at ${new Date().toISOString()}`;
+        by = "read-only access";
+      } else if (byRule) {
         const rules = byRule.rules.map((r) => `#${r.id} ${r.kind} \`${r.pattern}\``).join(", ");
         answered = `auto-approved by rule ${rules} (set by the human), at ${new Date().toISOString()}`;
         by = `rule ${byRule.rules.map((r) => `#${r.id}`).join(", ")}`;
       } else {
         let r;
         const title = `Run a command: ${cmd}`;
-        const details = auto?.capped ? `${header}\n\n(It matches a rule, but it already ran its hourly maximum of commands without asking.)` : header;
+        const details = header;
         try { r = await ctx.askHuman({ kind: "tool", tool: SHELL_TOOL, title, details, signal: extra?.signal }); }
         catch (e) { return text(e.message, true); }
         answered = `${r.status} by ${r.decidedBy ?? "nobody"} at ${r.decidedAt ?? "-"}`;
@@ -418,7 +421,7 @@ export function makeSelfHandlers(ctx) {
         `${header}\n\nAnswer: ${answered}\nResult: ${how}, ${out.seconds}s${out.truncated ? " (output cut in the middle)" : ""}${lan ? `\nLAN access: ${reachLine(lan.targets)}` : ""}\n\nOutput:\n${out.output}`,
         out.exitCode === 0 && !out.timedOut);
       const shown = out.output.length > 20_000 ? `${out.output.slice(0, 8000)}\n… (${out.output.length - 20_000} characters left out) …\n${out.output.slice(-12_000)}` : out.output;
-      return text(`${byRule ? "(ran without asking: one of your command rules allows it)\n" : ""}${how} (${out.seconds}s)\n\n${shown || "(no output)"}`, out.exitCode !== 0 || out.timedOut);
+      return text(`${byRule ? (byRule.readOnly ? "(ran without asking: it only reads, and you may run read-only commands freely)\n" : "(ran without asking: one of your command rules allows it)\n") : ""}${how} (${out.seconds}s)\n\n${shown || "(no output)"}`, out.exitCode !== 0 || out.timedOut);
     },
 
     // What this agent may reach on the human's network, and how. Names and addresses only: credentials stay in the gateway.
@@ -455,6 +458,9 @@ export function makeSelfHandlers(ctx) {
           "Anything not listed here is unreachable. If you need another device, call request_network_access with its IP, port and why: the human approves it in the chat.",
         ] : ["You can't reach anything on the human's network yet. If a task needs a device there, call request_network_access with its IP, port and why: the human approves it in the chat."],
         commands_you_may_run_without_asking: rules.map((r) => ({ [r.kind === "exact" ? "exactly" : "starting_with"]: r.pattern, lan: r.lan })),
+        read_only_commands_without_asking: store.get(caller)?.readOnlyCommands
+          ? "yes: commands that only read in your own folder (ls, cat, head, tail, grep, rg, find, jq, wc, du, stat, diff, sort...), alone or piped, run without asking. Anything that writes, deletes, uses the network or your devices, git, sed, awk or a script still asks."
+          : "no",
       }, null, 2));
     },
 

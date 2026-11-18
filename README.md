@@ -157,8 +157,13 @@ Open `http://<server-ip>:8090` and sign in.
   full). **Always allow this command** on a request adds an *Exactly* rule. Only plain commands match: any
   `;` `&` `>` `<` `$` `` ` `` `(` `)` still asks, a pipeline (`a | b`) needs every part to match, and anything
   about the log, the database, the agents CLI or purging always asks, whatever the rules say. Each one is in
-  Activity as *Auto-approved by rule #N*. At most 60 an hour per agent; after that it asks again. Agents can't
-  add rules. CLI: `agents commands <name>`, `agents commands <name> allow [--prefix] [--lan read|full] <command>`,
+  Activity as *Auto-approved by rule #N*. Agents can't
+  add rules. **Read-only commands** (a switch in the same place, off by default): commands that only read inside
+  the agent's own folder (`ls`, `cat`, `grep`, `rg`, `find`, `jq`, `wc`, `du`, `diff`, `sort`…, alone or piped) run
+  without asking, with no network. Anything that writes or deletes, uses the internet or your
+  devices (`curl`, `lan`, `ssh`), looks outside its folder (`..`, `~`, other paths), or can run other programs
+  (`git`, `sed`, `awk`, `find -exec`, scripts) still asks. CLI: `agents commands <name> read-only on|off`,
+  `agents commands <name>`, `agents commands <name> allow [--prefix] [--lan read|full] <command>`,
   `agents commands remove <id>`.
 - **Your home network**: agents can't reach anything there until they ask in the chat and you grant that one
   device. See [Home network](#home-network).

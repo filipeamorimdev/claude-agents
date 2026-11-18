@@ -34,7 +34,7 @@ import { DatabaseSync } from "node:sqlite";
 import crypto from "node:crypto";
 import cron from "node-cron";
 import { describeEvent } from "./events.mjs";
-import { validateRule, autoApproval, RULES_MAX, AUTO_PER_HOUR } from "./command-rules.mjs";
+import { validateRule, autoApproval, isReadOnly } from "./command-rules.mjs";
 
 // ---------- policy ----------
 
@@ -87,7 +87,7 @@ export const TASKS_OPEN_MAX = 5;
 // A terminal command an agent asks to run (run_command). Each one waits for the human, unless one of the agent's
 // command rules (command_rules, set by the human) auto-approves it. It isn't a tool an "ask first" rule is set for.
 export const SHELL_TOOL = "Shell";
-// The start of the log line of an auto-approved command (also how the hourly cap counts them)
+// The start of the log line of an auto-approved command
 export const AUTO_APPROVED = "Auto-approved";
 // What a log entry is: a run's request and end, a tool call and its result, what the agent said or thought,
 // a tool call that was refused, or an audit event.
@@ -417,6 +417,10 @@ export function openStore(file) {
   if (!db.prepare("PRAGMA table_info(agents)").all().some((c) => c.name === "display_name")) {
     db.exec("ALTER TABLE agents ADD COLUMN display_name TEXT NOT NULL DEFAULT ''");
   }
+  // migration: read-only commands run without asking (off by default; only the human turns it on)
+  if (!db.prepare("PRAGMA table_info(agents)").all().some((c) => c.name === "read_only_commands")) {
+    db.exec("ALTER TABLE agents ADD COLUMN read_only_commands INTEGER NOT NULL DEFAULT 0");
+  }
   // migration: an update proposal records what it changes (see changesOf)
   if (!db.prepare("PRAGMA table_info(proposals)").all().some((c) => c.name === "changes")) {
     db.exec("ALTER TABLE proposals ADD COLUMN changes TEXT");
@@ -452,7 +456,7 @@ export function openStore(file) {
   const row2agent = (r) => r && {
     name: r.name, displayName: r.display_name ?? "", description: r.description, enabled: !!r.enabled, schedule: r.schedule,
     model: r.model, effort: r.effort, maxTurns: turnsFor(r.effort), tools: JSON.parse(r.tools), prompt: r.prompt,
-    createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
+    createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at, readOnlyCommands: !!r.read_only_commands,
   };
   const row2proposal = (p) => p && { ...p, config: JSON.parse(p.config), changes: p.changes ? JSON.parse(p.changes) : null };
   const row2group = (r) => r && { id: r.id, name: r.name, members: JSON.parse(r.members), createdBy: r.created_by, createdAt: r.created_at };
@@ -884,7 +888,6 @@ export function openStore(file) {
       if (!store.get(agent)) throw new Error(`no agent "${agent}"`);
       const { errors, rule } = validateRule(input);
       if (errors.length) throw new Error(errors.join("; "));
-      if (db.prepare("SELECT COUNT(*) AS n FROM command_rules WHERE agent=?").get(agent).n >= RULES_MAX) throw new Error(`at most ${RULES_MAX} rules per agent`);
       const same = db.prepare("SELECT id FROM command_rules WHERE agent=? AND kind=? AND pattern=?").get(agent, rule.kind, rule.pattern);
       if (same) {
         db.prepare("UPDATE command_rules SET lan=?, note=? WHERE id=?").run(rule.lan, rule.note, same.id);
@@ -897,6 +900,13 @@ export function openStore(file) {
       store.event(actor, "command-rule", agent, { rule: id, ...rule });
       return id;
     },
+    /** Read-only commands (command-rules.mjs isReadOnly) run without asking. Only the human switches it. */
+    setReadOnlyCommands(agent, on, actor) {
+      if (!/^human \(/.test(String(actor))) throw new Error("only the human sets which commands run without asking");
+      if (!store.get(agent)) throw new Error(`no agent "${agent}"`);
+      db.prepare("UPDATE agents SET read_only_commands=? WHERE name=?").run(on ? 1 : 0, agent);
+      store.event(actor, "read-only-commands", agent, { on: !!on });
+    },
     removeCommandRule(id, actor) {
       const r = db.prepare("SELECT * FROM command_rules WHERE id=?").get(id);
       if (!r) throw new Error(`no rule #${id}`);
@@ -906,15 +916,13 @@ export function openStore(file) {
     },
     /**
      * Whether an agent's command runs without asking: { rules: [{ id, kind, pattern, lan }], lan } or null.
-     * Also null once the agent ran AUTO_PER_HOUR commands without asking in the last hour (then it asks again).
+     * With read-only commands on, a command that only reads in its own folder runs too: { rules: [], lan: "none",
+     * readOnly: true }.
      */
     autoApprove(agent, cmd) {
       const rules = store.commandRules(agent);
       const r = autoApproval(rules, cmd);
-      if (!r) return null;
-      const since = new Date(Date.now() - 3600e3).toISOString();
-      const recent = db.prepare("SELECT COUNT(*) AS n FROM agent_log WHERE agent=? AND tool=? AND at>? AND text LIKE ?").get(agent, SHELL_TOOL, since, `${AUTO_APPROVED}%`).n;
-      if (recent >= AUTO_PER_HOUR) return { capped: true };
+      if (!r) return store.get(agent)?.readOnlyCommands && isReadOnly(cmd, agent) ? { rules: [], lan: "none", readOnly: true } : null;
       return { rules: rules.filter((x) => r.rules.includes(x.id)), lan: r.lan };
     },
 

@@ -43,6 +43,9 @@ Commands an agent may run without asking you (none by default; each one is still
   agents commands <name> allow [--prefix] [--lan read|full] <command...>
                                    exactly this command (or, with --prefix, anything starting with it). --lan: what it
                                    may reach on your network when it runs that way (default: nothing)
+  agents commands <name> read-only on|off
+                                   commands that only read in its own folder (ls, cat, grep, find, jq…) run without
+                                   asking; anything that writes, uses the network or leaves its folder still asks
   agents commands remove <id>      remove a rule: it asks again
 
 Your home network (devices agents may reach: set them in the chat, house icon):
@@ -267,6 +270,13 @@ try {
       }
       const name = need(first, "agent name");
       if (!store.get(name)) fail(`no agent "${name}"`);
+      if (sub === "read-only") {
+        const on = need(rest[0], "on or off");
+        if (!["on", "off"].includes(on)) fail("read-only: on or off");
+        store.setReadOnlyCommands(name, on === "on", HUMAN);
+        console.log(on === "on" ? `✓ ${name} runs read-only commands (ls, cat, grep, find…) in its folder without asking` : `✓ ${name} asks again before read-only commands`);
+        break;
+      }
       if (sub === "allow") {
         let kind = "exact", lan = "none";
         const words = [];
@@ -282,7 +292,9 @@ try {
       }
       if (sub) fail(`unknown "commands ${name} ${sub}". See: agents help`);
       const list = store.commandRules(name);
-      if (!list.length) { console.log(`${name} asks you before every command.`); break; }
+      const ro = store.get(name).readOnlyCommands;
+      console.log(`read-only commands without asking: ${ro ? "on" : "off"}`);
+      if (!list.length) { console.log(ro ? `No rules: ${name} asks before every command that isn't read-only.` : `${name} asks you before every command.`); break; }
       for (const r of list) console.log(`#${String(r.id).padEnd(4)} ${pad(r.kind, 7)} ${pad(`lan:${r.lan}`, 9)} ${r.pattern}`);
       break;
     }

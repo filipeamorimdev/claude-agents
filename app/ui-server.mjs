@@ -312,7 +312,7 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
     send(res, 200, {
       ...agentView(a, store.runningAgents()), prompt: a.prompt, createdBy: a.createdBy, runs: store.runs(name, 10),
       rules: store.rules(name), memories: store.memories(name), triggers: store.triggers(name),
-      commandRules: store.commandRules(name), lan, reach: await reachOf(a, lan),
+      commandRules: store.commandRules(name), readOnlyCommands: a.readOnlyCommands, lan, reach: await reachOf(a, lan),
     });
   });
 
@@ -322,6 +322,12 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
     const { kind = "exact", pattern = "", lan = "none", note = "" } = await json(req);
     try { store.addCommandRule(name, { kind, pattern, lan, note }, "human (ui)"); } catch (e) { return send(res, 400, { error: e.message }); }
     send(res, 200, { commandRules: store.commandRules(name) });
+  });
+  route("PUT", "/api/agents/([a-z0-9-]+)/read-only-commands", async (req, res, [name]) => {
+    if (!store.get(name)) return send(res, 404, { error: "no such agent" });
+    const { on = false } = await json(req);
+    try { store.setReadOnlyCommands(name, on === true, "human (ui)"); } catch (e) { return send(res, 400, { error: e.message }); }
+    send(res, 200, { readOnlyCommands: store.get(name).readOnlyCommands });
   });
   route("DELETE", "/api/command-rules/(\\d+)", (req, res, [id]) => {
     let r;
