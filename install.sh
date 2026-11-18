@@ -129,7 +129,7 @@ info "compose: $(docker compose version --short) ✓"
 MEM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
 [ "$MEM_MB" -lt 3500 ] && warn "only ${MEM_MB} MB RAM; 4 GB+ recommended (8 GB with the browser agent)"
 [ -d /etc/openmediavault ] && info "OpenMediaVault detected"
-for cname in claude-agents browser-admaster claude-agents-firewall claude-agents-shell claude-agents-vault claude-agents-lan; do
+for cname in claude-agents claude-agents-browser browser-admaster claude-agents-firewall claude-agents-shell claude-agents-vault claude-agents-lan; do
   owner=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$cname" 2>/dev/null || true)
   if [ -n "$owner" ] && [ "$owner" != "$REPO_DIR" ]; then
     die "a '$cname' container from another setup is running ($owner). Stop it first (OMV: Services → Compose → Files → Down)."
@@ -296,9 +296,10 @@ info ".env written (600) ✓"
 step "Building and starting (first build takes a few minutes on a Pi)"
 remove_old_firewall keep-rules
 run docker compose build --pull
-[ "$BROWSER" = 1 ] && run docker compose pull browser-admaster
+[ "$BROWSER" = 1 ] && run docker compose pull browser
 run docker compose up -d --remove-orphans
-[ "$BROWSER" = 0 ] && run docker rm -f browser-admaster >/dev/null 2>&1 || true
+[ "$BROWSER" = 0 ] && run docker rm -f claude-agents-browser >/dev/null 2>&1 || true
+run docker rm -f browser-admaster >/dev/null 2>&1 || true   # the browser's name before it became claude-agents-browser
 
 # ---------- verify ----------
 step "Verifying safeguards"

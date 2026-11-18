@@ -280,11 +280,11 @@ services:
       driver: json-file
       options: { max-size: "1m", max-file: "3" }
 
-  browser-admaster:
+  browser:
     profiles: [browser]
     # Pinned: the entrypoint and flags below depend on this image's layout. Bump on purpose.
     image: ${BROWSER_IMAGE:-mcr.microsoft.com/playwright/mcp:v0.0.83}
-    container_name: browser-admaster
+    container_name: claude-agents-browser
     restart: unless-stopped
     user: "${AGENT_UID:-1000}:${AGENT_GID:-1000}"
     depends_on:
@@ -336,7 +336,9 @@ services:
       - ${DATA_DIR}/browsers/shots:/shots
     <<: *hardening
     networks:
-      agents: {}
+      agents:
+        # Its old name: config/mcp-servers.mjs files made before the rename still point at http://browser-admaster:8931
+        aliases: [browser-admaster]
       # Only this container and the LAN gateway: the way to the devices you let an agent's browser open
       browserlan:
         ipv4_address: ${LAN_BROWSER_IP:-172.30.2.10}

@@ -11,7 +11,7 @@ export const mcpServers = {
     description:
       "Headless Chromium: each agent gets its own, which stays signed in. " +
       "To log in, type the login NAMES from list_logins (e.g. OLX_PASSWORD); the real values are filled in for you.",
-    config: { type: "http", url: "http://browser-admaster:8931/mcp" },
+    config: { type: "http", url: "http://browser:8931/mcp" },
     logins: true, // fills in the vault's logins: its agents get list_logins and request_login
   },
 

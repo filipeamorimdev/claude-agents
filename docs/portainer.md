@@ -89,7 +89,7 @@ In the stack's page, the containers should show:
 | `claude-agents-firewall` | **healthy**. Its logs say `using iptables-nft` or `using iptables-legacy`. |
 | `claude-agents`, `claude-agents-shell`, `claude-agents-lan` | **running**. The latter two show healthy. |
 | `claude-agents-vault` | **running** (healthy). It keeps logins: websites, and device passwords for SSH. |
-| `browser-admaster` | **running**, only with `COMPOSE_PROFILES=browser`. |
+| `claude-agents-browser` | **running**, only with `COMPOSE_PROFILES=browser`. |
 
 Open `http://<server-ip>:8090` and sign in with `UI_PASSWORD`.
 
@@ -116,6 +116,9 @@ Containers → `claude-agents` → **Console** → Connect (`/bin/sh`):
   1. Push to `main`.
   2. Wait for the **images** workflow to go green.
   3. Stacks → `claude-agents` → **Pull and redeploy**, with **Re-pull image** on.
+- **Renamed containers:** turn on **Prune services** when you redeploy (or delete the old container first), so it
+  doesn't keep its network address. Example: the browser was called `browser-admaster` before it became
+  `claude-agents-browser`.
 - **A setting:** Stacks → `claude-agents` → edit the variable → **Pull and redeploy**.
 - **Data:** an update or redeploy keeps everything in `DATA_DIR`.
 - **Agent and connector config:** `DATA_DIR/config/` (`agents.mjs`, `mcp-servers.mjs`). Edit, then restart the

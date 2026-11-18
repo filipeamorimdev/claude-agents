@@ -103,7 +103,7 @@ if [ "$(docker inspect -f '{{.State.Running}}' claude-agents-shell 2>/dev/null)"
   r=$(docker exec claude-agents-shell node -e 'fetch("http://127.0.0.1:8933/exec",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent:"x",command:"id"})}).then(r=>console.log(r.status),()=>console.log("error"))' 2>/dev/null)
   [ "$r" = 403 ] && ok "refuses callers other than the app" || bad "the sandbox answered $r to a caller that isn't the app"
   # Its network has only the app: no vault, no browsers, no LAN, not this host
-  for target in vault:8932 browser-admaster:8931 $(for h in $GW $LANIP $BRIDGE; do echo "$h:80"; done); do
+  for target in vault:8932 browser:8931 $(for h in $GW $LANIP $BRIDGE; do echo "$h:80"; done); do
     r=$(docker exec claude-agents-shell node -e '
       const [host,port]=process.argv[1].split(":");
       const s=require("net").connect({host,port:Number(port),timeout:3000});
@@ -157,25 +157,25 @@ if docker inspect claude-agents-vault >/dev/null 2>&1; then
   case $? in 0) ok "the app reaches it, and it answers with names only";; 1) bad "the vault returned a value!";; *) bad "the app cannot reach the vault";; esac
 fi
 
-if docker inspect browser-admaster >/dev/null 2>&1; then
-  echo "browser-admaster container"
-  [ "$(docker inspect -f '{{.State.Running}}' browser-admaster)" = true ] && ok "running" || bad "not running (docker logs browser-admaster)"
-  n=$(docker exec browser-admaster sh -c 'ls /run/browser-secrets/agents 2>/dev/null | wc -l' 2>/dev/null | tr -d ' ')
+if docker inspect claude-agents-browser >/dev/null 2>&1; then
+  echo "browser container"
+  [ "$(docker inspect -f '{{.State.Running}}' claude-agents-browser)" = true ] && ok "running" || bad "not running (docker logs claude-agents-browser)"
+  n=$(docker exec claude-agents-browser sh -c 'ls /run/browser-secrets/agents 2>/dev/null | wc -l' 2>/dev/null | tr -d ' ')
   [ "${n:-0}" -gt 0 ] && ok "site logins from the vault for $n agent(s)" || echo "  - no site logins for any agent yet: add them in the chat (key icon)"
-  docker exec browser-admaster test -e /run/browser-secrets/secrets.env && bad "every login is in one shared file" || ok "each agent's browser gets only its own logins"
-  [ -z "$(docker port browser-admaster 2>/dev/null)" ] && ok "no ports published to the LAN" || bad "browser has published ports"
+  docker exec claude-agents-browser test -e /run/browser-secrets/secrets.env && bad "every login is in one shared file" || ok "each agent's browser gets only its own logins"
+  [ -z "$(docker port claude-agents-browser 2>/dev/null)" ] && ok "no ports published to the LAN" || bad "browser has published ports"
   docker exec claude-agents node -e '
-    fetch("http://browser-admaster:8931/mcp",{signal:AbortSignal.timeout(5000)}).then(()=>process.exit(0)).catch(()=>process.exit(1))' \
+    fetch("http://browser:8931/mcp",{signal:AbortSignal.timeout(5000)}).then(()=>process.exit(0)).catch(()=>process.exit(1))' \
     && ok "reachable from the agents container" || bad "agents cannot reach the browser"
   docker exec claude-agents node -e '
-    Promise.all([8930,8940,8941].map(p=>fetch(`http://browser-admaster:${p}/mcp`,{signal:AbortSignal.timeout(3000)}).then(()=>1,()=>0)))
+    Promise.all([8930,8940,8941].map(p=>fetch(`http://browser:${p}/mcp`,{signal:AbortSignal.timeout(3000)}).then(()=>1,()=>0)))
       .then(r=>process.exit(r.some(Boolean)?1:0))' \
     && ok "only reachable through its guard" || bad "an agent's browser is reachable without the guard"
   docker exec claude-agents node -e '
-    fetch("http://browser-admaster:8931/mcp",{method:"POST",signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.status===400?0:1),()=>process.exit(1))' \
+    fetch("http://browser:8931/mcp",{method:"POST",signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.status===400?0:1),()=>process.exit(1))' \
     && ok "refuses a caller that doesn't name its agent" || bad "the guard serves a caller without an agent name"
   docker exec claude-agents node --input-type=module -e '
-    const u="http://browser-admaster:8931/mcp", h={"Content-Type":"application/json",Accept:"application/json, text/event-stream","X-Agent":"verify-check"};
+    const u="http://browser:8931/mcp", h={"Content-Type":"application/json",Accept:"application/json, text/event-stream","X-Agent":"verify-check"};
     const rpc=async(body,sid)=>{const r=await fetch(u,{method:"POST",headers:sid?{...h,"mcp-session-id":sid}:h,body:JSON.stringify(body)});return {sid:r.headers.get("mcp-session-id"),text:await r.text()}};
     const {sid}=await rpc({jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"verify",version:"1"}}});
     await rpc({jsonrpc:"2.0",method:"notifications/initialized"},sid);

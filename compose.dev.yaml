@@ -16,7 +16,7 @@ services:
   firewall:
     image: ${COMPOSE_PROJECT_NAME}-firewall:local
     container_name: ${COMPOSE_PROJECT_NAME}-firewall
-  browser-admaster:
+  browser:
     container_name: ${COMPOSE_PROJECT_NAME}-browser
   vault:
     image: ${COMPOSE_PROJECT_NAME}:local
