@@ -282,8 +282,9 @@ services:
 
   browser:
     profiles: [browser]
-    # Pinned: the entrypoint and flags below depend on this image's layout. Bump on purpose.
-    image: ${BROWSER_IMAGE:-mcr.microsoft.com/playwright/mcp:v0.0.83}
+    # Debian's Chromium driven by the Playwright MCP server (browser/Dockerfile, which pins its version).
+    # The entrypoint and flags below depend on that image's layout.
+    image: ${BROWSER_IMAGE:-ghcr.io/filipeamorimdev/claude-agents-browser:latest}
     container_name: claude-agents-browser
     restart: unless-stopped
     user: "${AGENT_UID:-1000}:${AGENT_GID:-1000}"
@@ -326,6 +327,7 @@ services:
     command:
       - --headless
       - --browser=chromium
+      - --executable-path=/usr/lib/chromium/chromium   # Debian's Chromium, not Playwright's Chrome for Testing
       - --no-sandbox
       - --allowed-hosts=*
       - --shared-browser-context   # an agent's sessions share its browser: a profile can't be opened twice

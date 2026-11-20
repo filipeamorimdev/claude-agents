@@ -255,26 +255,33 @@ async function livePage(agent) {
   let pages;
   try { pages = await fetch(`http://127.0.0.1:${b.cdp}/json/list`, { signal: AbortSignal.timeout(2000) }).then((r) => r.json()); }
   catch { return null; } // the browser opens on the agent's first browser tool call
-  const page = pages.find((p) => p.type === "page" && !p.url.startsWith("devtools://"));
+  pages = pages.filter((p) => p.type === "page" && !p.url.startsWith("devtools://"));
+  // The tab you picked in the live view while it's open, else the one the browser used last (listed first).
+  const page = pages.find((p) => p.id === b.liveTab) ?? pages[0];
   if (!page) return null;
   if (!b.live || b.live.closed || b.live.id !== page.id) {
     b.live?.close();
     b.live = Object.assign(await devtools(page.webSocketDebuggerUrl), { id: page.id });
   }
-  return { b, page, s: b.live };
+  return { b, page, pages, s: b.live };
 }
 
-const KEYS = { Enter: [13, "\r"], Tab: [9], Backspace: [8], Escape: [27], Delete: [46], ArrowUp: [38], ArrowDown: [40], ArrowLeft: [37], ArrowRight: [39] };
+const KEYS = { Enter: [13, "\r"], Tab: [9], Backspace: [8], Escape: [27], Delete: [46], ArrowUp: [38], ArrowDown: [40], ArrowLeft: [37], ArrowRight: [39], Home: [36], End: [35] };
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 async function live(res, agent, what, body) {
   const p = await livePage(agent).catch(() => null);
   if (!p) return reply(res, 404, { error: "Its browser isn't open right now: it's open only while the agent is using it, during a run." });
-  const { b, page, s } = p;
+  const { b, page, pages, s } = p;
   if (what === "shot") {
-    const [{ cssVisualViewport: v }, { data }] = await Promise.all([s.send("Page.getLayoutMetrics"), s.send("Page.captureScreenshot", { format: "jpeg", quality: 70 })]);
+    // Chromium can refuse the first frame just after a navigation ("Unable to capture screenshot"): one more try.
+    const capture = () => s.send("Page.captureScreenshot", { format: "jpeg", quality: 70 });
+    const [{ cssVisualViewport: v }, { data }] = await Promise.all([s.send("Page.getLayoutMetrics"),
+      capture().catch(() => new Promise((r) => setTimeout(r, 400)).then(capture))]);
     res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "no-store", "X-Page-Url": encodeURI(page.url).slice(0, 2000),
-      "X-Page-Title": encodeURIComponent(page.title).slice(0, 500), "X-Viewport": `${Math.round(v.clientWidth)}x${Math.round(v.clientHeight)}` });
+      "X-Page-Title": encodeURIComponent(page.title).slice(0, 500), "X-Viewport": `${Math.round(v.clientWidth)}x${Math.round(v.clientHeight)}`,
+      // Its tabs, for the tab strip (kept short: it's a header)
+      "X-Tabs": encodeURIComponent(JSON.stringify(pages.slice(0, 15).map((t) => ({ id: t.id, title: t.title.slice(0, 60), url: t.url.slice(0, 200), active: t.id === page.id })))) });
     return res.end(Buffer.from(data, "base64"));
   }
   let input;
@@ -306,6 +313,21 @@ async function live(res, agent, what, body) {
     case "reload":
       await s.send("Page.reload");
       break;
+    case "tab": { // show another of its tabs (the agent keeps working in whichever tab it was using)
+      const t = pages.find((x) => x.id === input.id);
+      if (!t) return reply(res, 404, { error: "That tab is closed" });
+      b.liveTab = t.id;
+      await fetch(`http://127.0.0.1:${b.cdp}/json/activate/${t.id}`, { signal: AbortSignal.timeout(2000) }).catch(() => {});
+      break;
+    }
+    case "close-tab": {
+      const t = pages.find((x) => x.id === input.id);
+      if (!t) return reply(res, 404, { error: "That tab is closed" });
+      if (pages.length < 2) return reply(res, 400, { error: "It's the browser's last tab" });
+      if (b.liveTab === t.id) b.liveTab = null;
+      await fetch(`http://127.0.0.1:${b.cdp}/json/close/${t.id}`, { signal: AbortSignal.timeout(2000) });
+      break;
+    }
     default:
       return reply(res, 400, { error: "unknown input" });
   }

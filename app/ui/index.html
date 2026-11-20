@@ -349,6 +349,14 @@ body.resizing .dock, body.resizing .main { pointer-events: none; }
 .live img { display: block; width: 100%; height: auto; user-select: none; }
 .live.control { outline: 3px solid var(--amber); outline-offset: -3px; }
 .live.control img { cursor: crosshair; }
+.live-tabs { display: flex; gap: 4px; overflow-x: auto; margin-bottom: -6px; scrollbar-width: thin; }
+.live-tab { display: flex; align-items: center; min-width: 0; max-width: 220px; flex: 0 1 auto; border-radius: 8px 8px 0 0; background: var(--surface-2, rgba(127,127,127,.12)); color: var(--muted); }
+.live-tab.active { background: #0b0f17; color: #e6ebf3; }
+.live-tab button { background: none; border: 0; color: inherit; font: inherit; font-size: 12.5px; cursor: pointer; }
+.live-tab-name { padding: 7px 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; text-align: left; }
+.live-tab-x { padding: 4px 8px 4px 0; font-size: 15px !important; line-height: 1; opacity: .7; } .live-tab-x:hover { opacity: 1; }
+.live:focus { outline: none; } .live.control:focus-visible, .live.control:focus { outline: 3px solid var(--cobalt); }
+@media (hover: hover) and (pointer: fine) { .live-touch { display: none !important; } }
 .live-bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .live-bar .grow { flex: 1; min-width: 160px; }
 .live-status { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1239,17 +1247,6 @@ async function openLoginsDrawer() {
   const value = h("input", { class: "field", type: "password", autocomplete: "off", placeholder: "Value" });
   const site = h("input", { class: "field", autocomplete: "off", spellcheck: "false", placeholder: "Site (optional), e.g. https://www.vinted.pt or http://192.168.1.1:8443" });
   const newGrants = h("div", { class: "grants" }, (v.agents ?? []).length ? ["Can use it:", ...grantBoxes([], null)] : null);
-  const newSite = h("input", { class: "field", autocomplete: "off", spellcheck: "false", placeholder: "https://www.vinted.pt, vinted.pt, *.vinted.net or 192.168.1.1:8443",
-    onkeydown: (e) => { if (e.key === "Enter") addSite.click(); } });
-  const newSiteNote = h("input", { class: "field", maxlength: "200", autocomplete: "off", placeholder: "What it's for (optional), e.g. Selling on Vinted",
-    onkeydown: (e) => { if (e.key === "Enter") addSite.click(); } });
-  const addSite = h("button", { class: "btn", onclick: async () => {
-    if (!newSite.value.trim()) return;
-    try {
-      const r = await api("POST", "/api/logins/sites", { add: newSite.value.trim(), note: newSiteNote.value.trim() });
-      toast("Site added"); await loadLogins(); rerender();
-    } catch (e) { toast(e.message); }
-  } }, "Add");
   showDrawer({ label: "Site logins", title: h("div", { class: "drawer-title" }, "Site logins"), focus: v.available ? name : undefined, body: [
     h("p", { style: "margin:0;color:var(--muted)" }, "Logins for the browser agent. What you type here goes straight to the vault, encrypted, in its own container. " +
       "Agents only see the names (e.g. OLX_PASSWORD): they type a name into a sign-in form and the browser fills in the value. Each login works only for the agents you tick. When an agent needs a login it doesn't have, it asks you under its reply."),
@@ -1262,15 +1259,6 @@ async function openLoginsDrawer() {
           const agents = [...newGrants.querySelectorAll("input:checked")].map((b) => b.value);
           await api("PUT", `/api/logins/${name.value}`, { value: value.value, site: site.value, agents });
         }, `${name.value} saved`) }, "Save")))),
-      h("div", {}, h("h4", {}, "Sites the browser can open"), h("div", {}, ...v.sites.map((st) => h("span", { class: "chip site",
-          title: [st.note, st.source === "stack" ? "From BROWSER_ALLOWED_ORIGINS in the stack's variables" : null].filter(Boolean).join("\n") || null },
-          st.rule, st.note ? h("span", { style: "color:var(--muted);margin-left:6px" }, `· ${st.note}`) : null,
-          st.source === "vault" ? h("button", { "aria-label": `Remove ${st.rule}`, title: "Remove",
-            onclick: () => confirm(`Stop the browser opening ${st.rule}?`) && act(() => api("POST", "/api/logins/sites", { remove: st.rule }), "Site removed") }, "✕") : null))),
-        h("div", { style: "display:flex;gap:8px;margin-top:8px;flex-wrap:wrap" }, newSite, newSiteNote, addSite),
-        h("p", { class: "field-hint" }, "The browser opens pages only on these sites. Their pages load images, scripts and sign-in frames from anywhere, never from your network. Changes restart the browser. " +
-          "For a device on your network (an IP and port), ask the agent in its chat: it asks you for access there. " +
-          "Describe or change what a site is for in an agent's details.")),
     ],
   ] });
 }
@@ -1722,7 +1710,8 @@ async function openDrawer(name) {
       } }, r.note ? "Edit" : "Describe"),
         device && r.ssh ? h("button", { class: "btn sm", title: "After you reset or replaced the device: the next ssh trusts the host key it presents",
           onclick: () => confirm("Trust the host key it presents next time? Only if you changed or reset the device yourself.") && change(() => api("DELETE", `/api/lan/targets/${r.id}/host-key`), "The next ssh trusts its host key") }, "Trust new host key") : null,
-        device ? h("button", { class: "btn sm danger", onclick: () => confirm(`Stop ${labelOf(name)} reaching ${r.url}?`) && change(() => api("DELETE", `/api/lan/grants/${name}/${r.id}`), "Access removed") }, "Remove") : null) : null);
+        device ? h("button", { class: "btn sm danger", onclick: () => confirm(`Stop ${labelOf(name)} reaching ${r.url}?`) && change(() => api("DELETE", `/api/lan/grants/${name}/${r.id}`), "Access removed") }, "Remove") : null,
+        r.kind === "site" && r.removable ? h("button", { class: "btn sm danger", onclick: () => confirm(`Stop the browser opening ${r.url}?`) && change(() => api("POST", "/api/logins/sites", { remove: r.url }), "Site removed") }, "Remove") : null) : null);
   };
   const reach = a.reach ?? [];
   if (a.lan == null) reach.push({ kind: "lan", url: null, note: "", detail: "The LAN gateway isn't running, so it can't reach any device on your network" });
@@ -1732,8 +1721,13 @@ async function openDrawer(name) {
       const rows = reach.filter((r) => r.kind === kind);
       return rows.length ? h("div", { style: "margin-bottom:8px" }, h("div", { class: "by", style: "font-weight:600;margin:4px 0" }, label), ...rows.map(reachRow)) : null;
     }),
-    a.browser ? h("div", { style: "display:flex;justify-content:flex-end;gap:8px;margin-top:6px" },
-      h("button", { class: "btn sm", onclick: () => openLoginsDrawer() }, "Change sites")) : null);
+    a.browser ? (() => {
+      const site = h("input", { class: "field", autocomplete: "off", spellcheck: "false", placeholder: "Add a site: https://www.vinted.pt, vinted.pt or *.vinted.pt",
+        onkeydown: (e) => { if (e.key === "Enter") add(); } });
+      const add = () => site.value.trim() && change(() => api("POST", "/api/logins/sites", { add: site.value.trim() }), "Site added: its browser can open it");
+      return h("div", {}, h("div", { class: "inline-add" }, site, h("button", { class: "btn", onclick: add }, "Add")),
+        h("p", { class: "field-hint" }, "Its browser opens pages only on these sites and on its devices on your network. For a device, ask it in the chat; once granted, it reaches it from its commands (lan, lan-ssh) and its browser alike."));
+    })() : null);
 
   // Memory: notes it keeps between runs, shown to it every time. Yours to change.
   const memRow = (m) => {
@@ -1907,13 +1901,31 @@ function openBrowserView(name, { action = null } = {}) {
   let control = !!action, vp = [1280, 720], busy = false;
   const img = h("img", { alt: `${labelOf(name)}'s browser`, draggable: "false", hidden: true });
   const empty = h("p", { style: "color:#c9d1dd;margin:24px;text-align:center" }, "Loading…");
-  const frame = h("div", { class: `live${control ? " control" : ""}` }, img, empty);
+  const frame = h("div", { class: `live${control ? " control" : ""}`, tabindex: "0", "aria-label": `${labelOf(name)}'s page: with Take control on, what you type goes to it` }, img, empty);
   const status = h("div", { class: "live-status" }, "");
   const at = (e) => { const r = img.getBoundingClientRect(); return { x: (e.clientX - r.left) * vp[0] / r.width, y: (e.clientY - r.top) * vp[1] / r.height }; };
-  const send = async (input) => {
+  // One at a time, in order: a click then fast typing must reach the page in the order you did them.
+  let queue = Promise.resolve();
+  const send = (input) => (queue = queue.then(async () => {
     try { await api("POST", `/api/browser/${name}/input`, input); setTimeout(refresh, 200); } catch (e) { toast(e.message); }
-  };
-  img.addEventListener("click", (e) => { if (control) send({ type: "click", ...at(e) }); });
+  }));
+  img.addEventListener("click", (e) => { if (!control) return; frame.focus({ preventScroll: true }); send({ type: "click", ...at(e) }); });
+  // Typing straight onto the picture: letters are gathered for a moment and sent as text, special keys as keys.
+  let pending = "", flushTimer = null;
+  const flush = () => { clearTimeout(flushTimer); flushTimer = null; if (pending) { send({ type: "type", text: pending }); pending = ""; } };
+  const PAGE_KEYS = new Set(["Enter", "Tab", "Backspace", "Escape", "Delete", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"]);
+  frame.addEventListener("keydown", (e) => {
+    if (!control || e.isComposing) return;
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") return; // the paste event below sends it
+    if (e.metaKey || e.ctrlKey || e.altKey && e.key.length !== 1) return; // leave the browser's own shortcuts alone
+    if (e.key.length === 1) { e.preventDefault(); e.stopPropagation(); pending += e.key; clearTimeout(flushTimer); flushTimer = setTimeout(flush, 120); return; }
+    if (PAGE_KEYS.has(e.key)) { e.preventDefault(); e.stopPropagation(); flush(); send({ type: "key", key: e.key }); }
+  });
+  frame.addEventListener("paste", (e) => {
+    if (!control) return;
+    const text = e.clipboardData?.getData("text/plain");
+    if (text) { e.preventDefault(); flush(); send({ type: "type", text }); }
+  });
   let wheel = 0, wheelTimer = null;
   img.addEventListener("wheel", (e) => {
     if (!control) return;
@@ -1922,13 +1934,30 @@ function openBrowserView(name, { action = null } = {}) {
     const p = at(e);
     wheelTimer = setTimeout(() => { send({ type: "scroll", ...p, dy: wheel }); wheel = 0; wheelTimer = null; }, 120);
   }, { passive: false });
-  const typed = h("input", { class: "field grow", autocomplete: "off", spellcheck: "false", placeholder: "Type here, then Send: it goes where you last clicked",
+  const typed = h("input", { class: "field grow", autocomplete: "off", spellcheck: "false", placeholder: "Type here, then Send: it goes where you last tapped",
     onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); typeIt(); } } });
   const typeIt = () => { if (typed.value) { send({ type: "type", text: typed.value }); typed.value = ""; } };
   const key = (k, label = k) => h("button", { class: "btn sm", onclick: () => send({ type: "key", key: k }) }, label);
-  const keys = h("div", { class: "live-bar", hidden: !control }, typed, h("button", { class: "btn sm primary", onclick: typeIt }, "Send"),
+  // With a keyboard you type on the page itself; this box is for touch screens, whose keyboard needs a field to open.
+  const keys = h("div", { class: "live-bar live-touch", hidden: !control }, typed, h("button", { class: "btn sm primary", onclick: typeIt }, "Send"),
     key("Enter"), key("Tab"), key("Backspace", "⌫"), key("Escape", "Esc"));
-  const toggle = h("input", { type: "checkbox", checked: control, onchange: (e) => { control = e.target.checked; frame.classList.toggle("control", control); keys.hidden = !control; } });
+  const toggle = h("input", { type: "checkbox", checked: control, onchange: (e) => { control = e.target.checked; frame.classList.toggle("control", control); keys.hidden = !control; if (control) frame.focus({ preventScroll: true }); else flush(); } });
+  // Its tabs: click one to see it, × to close it (with Take control on). Redrawn only when they change.
+  const tabs = h("div", { class: "live-tabs", role: "tablist", "aria-label": "Its tabs" });
+  let tabsSeen = "";
+  function showTabs(raw) {
+    if (raw === tabsSeen && tabs.dataset.control === String(control)) return;
+    tabsSeen = raw; tabs.dataset.control = String(control);
+    let list = [];
+    try { list = JSON.parse(raw || "[]"); } catch { list = []; }
+    const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };
+    tabs.replaceChildren(...list.map((t) => h("div", { class: `live-tab${t.active ? " active" : ""}`, title: `${t.title}\n${t.url}` },
+      h("button", { class: "live-tab-name", role: "tab", "aria-selected": String(!!t.active),
+        onclick: () => { if (!t.active) { send({ type: "tab", id: t.id }); setTimeout(refresh, 100); } } }, t.title || host(t.url) || "New tab"),
+      control && list.length > 1 ? h("button", { class: "live-tab-x", "aria-label": `Close ${t.title || "tab"}`,
+        onclick: () => send({ type: "close-tab", id: t.id }) }, "×") : null)));
+    tabs.hidden = list.length === 0;
+  }
   async function refresh() {
     if (!img.isConnected) return clearInterval(timer);
     if (busy || document.hidden) return;
@@ -1944,6 +1973,7 @@ function openBrowserView(name, { action = null } = {}) {
       vp = (r.headers.get("x-viewport") || "1280x720").split("x").map(Number);
       const dec = (s, f) => { try { return f(s || ""); } catch { return s || ""; } };
       status.textContent = [dec(r.headers.get("x-page-title"), decodeURIComponent), dec(r.headers.get("x-page-url"), decodeURI)].filter(Boolean).join(" · ");
+      showTabs(dec(r.headers.get("x-tabs"), decodeURIComponent));
     } catch { /* next tick */ } finally { busy = false; }
   }
   const timer = setInterval(refresh, 900);
@@ -1963,8 +1993,8 @@ function openBrowserView(name, { action = null } = {}) {
       h("button", { class: "btn sm", onclick: () => send({ type: "back" }) }, "‹ Back"),
       h("button", { class: "btn sm", onclick: () => send({ type: "reload" }) }, "Reload"),
       h("label", { class: "live-control", style: "margin-left:auto" }, toggle, "Take control")),
-    frame, status, keys,
-    h("p", { class: "field-hint", style: "margin:0" }, "Only you see this. With Take control on, click the picture to click the page and scroll over it to scroll. " +
+    tabs, frame, status, keys,
+    h("p", { class: "field-hint", style: "margin:0" }, "Only you see this. With Take control on, click the picture to click the page, scroll over it to scroll, and type: your keys and pastes go to the page. " +
       "The agent may be using the browser too: take control when it's waiting for you."),
   ], foot: action ? [note, h("button", { class: "btn danger", onclick: answer("deny") }, "Can't do it"), h("button", { class: "btn primary", onclick: answer("done") }, "Done, hand it back")] : null });
   refresh();

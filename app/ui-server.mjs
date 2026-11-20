@@ -44,7 +44,7 @@ const BROWSER_RESTART_MS = 3000;    // the browser notices new logins within a s
 const HOOK_MAX = 64 * 1024;         // webhook payload
 const HOOK_PER_HOUR = 30;           // runs one webhook may start per hour
 const HOOK_RE = /^\/hooks\/([A-Za-z0-9_-]{20,64})$/;
-const LIVE_INPUTS = new Set(["click", "scroll", "type", "key", "back", "reload"]);
+const LIVE_INPUTS = new Set(["click", "scroll", "type", "key", "back", "reload", "tab", "close-tab"]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function startUi({ store, engine, dataDir, bus, port, password, log, tls = null }) {
@@ -273,7 +273,7 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
       if (!v) out.push({ kind: "site", url: null, note: "", detail: "The vault isn't running, so its browser can't open any site" });
       for (const s of v?.sites ?? []) {
         const logins = v.logins.filter((l) => l.agents.includes(a.name) && l.site && siteAllowed(l.site, [s.rule])).map((l) => l.name);
-        out.push({ kind: "site", url: s.rule, note: s.note ?? "", editable: true, detail: [logins.length ? `signs in with ${logins.join(", ")}` : null,
+        out.push({ kind: "site", url: s.rule, note: s.note ?? "", editable: true, removable: s.source === "vault", detail: [logins.length ? `signs in with ${logins.join(", ")}` : null,
           s.source === "stack" ? "from BROWSER_ALLOWED_ORIGINS" : null].filter(Boolean).join(" · ") });
       }
     }
@@ -287,7 +287,7 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
           t.credential ? "its key is added for it" : null,
           t.ssh ? (t.mode === "full" ? `ssh as ${t.ssh.user} (key kept in the gateway): lan-ssh ${t.id} …` : `has an ssh key, but ssh needs full access`) : null,
           t.mode === "full" && t.sshLogins?.length ? `ssh with the vault password ${t.sshLogins.join(", ")}: lan-ssh --login …` : null,
-          t.browser ? "from its commands (lan …) and its browser" : "from its commands (lan …)"].filter(Boolean).join(" · ") });
+          usesLogins(a.tools, engine.registry) ? "from its commands (lan …) and its browser" : "from its commands (lan …)"].filter(Boolean).join(" · ") });
     }
     for (const tool of a.tools) {
       const key = tool.startsWith("mcp__") ? tool.slice(5) : null;
@@ -691,7 +691,7 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
     if (!r.ok) return send(res, r.status, await r.json().catch(() => ({ error: `The browser answered ${r.status}` })));
     res.writeHead(200, {
       "Content-Type": "image/jpeg", "Cache-Control": "no-store",
-      ...Object.fromEntries(["x-page-url", "x-page-title", "x-viewport"].map((h) => [h, r.headers.get(h) ?? ""])),
+      ...Object.fromEntries(["x-page-url", "x-page-title", "x-viewport", "x-tabs"].map((h) => [h, r.headers.get(h) ?? ""])),
     });
     res.end(Buffer.from(await r.arrayBuffer()));
   });
@@ -823,15 +823,14 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
   });
   route("PUT", "/api/lan/grants/([a-z0-9-]+)", async (req, res, [name]) => {
     if (!store.get(name)) return send(res, 404, { error: "no such agent" });
-    const { targets = {}, browser } = await json(req);
+    const { targets = {} } = await json(req);
     const clean = Object.fromEntries(Object.entries(targets && typeof targets === "object" ? targets : {})
       .filter(([id, m]) => TARGET_ID_RE.test(id) && LAN_MODES.includes(m)));
-    const inBrowser = Array.isArray(browser) ? browser.map(String).filter((id) => clean[id]) : undefined;
-    const after = await lanGw.grant(name, clean, inBrowser);
-    store.event("human (ui)", "lan-grant", name, { targets: after.targets.map((t) => ({ id: t.id, mode: t.mode, browser: !!t.browser })) });
+    const after = await lanGw.grant(name, clean);
+    store.event("human (ui)", "lan-grant", name, { targets: after.targets.map((t) => ({ id: t.id, mode: t.mode })) });
     addMessage(name, "system", "system", after.targets.length
-      ? `You let ${name} reach ${after.targets.map((t) => `${t.name} (${t.host}:${t.port}, ${t.mode === "full" ? "full access" : "read-only"}${t.browser ? ", also in its browser" : ""})`).join(", ")}` +
-        `${after.targets.some((t) => t.browser) ? " (its browser at http://IP:PORT/)" : " from its commands"}.`
+      ? `You let ${name} reach ${after.targets.map((t) => `${t.name} (${t.host}:${t.port}, ${t.mode === "full" ? "full access" : "read-only"})`).join(", ")}` +
+        ` from its commands${usesLogins(store.get(name).tools, engine.registry) ? " and its browser (at http://IP:PORT/)" : ""}.`
       : `${name} can no longer reach anything on your network.`);
     send(res, 200, { targets: after.targets });
   });
@@ -843,8 +842,8 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
     const t = st.targets.find((x) => x.id === id);
     if (!t) return send(res, 404, { error: `No device ${id}` });
     const targets = { ...(st.grants[name] ?? {}) }; delete targets[id];
-    const after = await lanGw.grant(name, targets, (st.browser?.[name] ?? []).filter((x) => x !== id));
-    store.event("human (ui)", "lan-grant", name, { targets: after.targets.map((x) => ({ id: x.id, mode: x.mode, browser: !!x.browser })) });
+    const after = await lanGw.grant(name, targets);
+    store.event("human (ui)", "lan-grant", name, { targets: after.targets.map((x) => ({ id: x.id, mode: x.mode })) });
     if (!Object.entries(st.grants).some(([a, g]) => a !== name && g[id])) {
       await lanGw.removeTarget(id);
       store.event("human (ui)", "lan-target", null, { id, removed: true });

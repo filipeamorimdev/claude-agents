@@ -274,7 +274,8 @@ one into the stack first. Command line:
 cd claude-agents && git pull && sudo ./install.sh
 ```
 
-The browser image is pinned (`BROWSER_IMAGE`); it changes only when `compose.yaml` bumps it.
+The browser image runs Debian's Chromium; pulling it gets Chromium's latest security fixes. Its
+Playwright MCP version is pinned in `browser/Dockerfile` and changes only when that file bumps it.
 Your `DATA_DIR/config/` files and agents are never overwritten by an update.
 
 ## Replacing an older install
@@ -324,8 +325,9 @@ stores them encrypted (AES-256-GCM) in `DATA_DIR/vault`, which no other containe
   **Take control** to click, scroll and type in it yourself. When a site needs something only you can do
   (a captcha, a code sent to you), the agent calls `request_takeover`: a card asks you to open its browser,
   do it, and tap **Done, hand it back**, and it carries on from there.
-- The browser opens pages only on the sites listed under *Sites the browser can open*: `BROWSER_ALLOWED_ORIGINS`
-  plus the ones you add in the chat (`https://www.vinted.pt`, `vinted.pt`, or `*.vinted.pt`). A page on
+- The browser opens pages only on its sites, listed in the agent's details under *What it can reach* → *In its
+  browser*: `BROWSER_ALLOWED_ORIGINS` plus the ones you add there or allow when saving a login it asked for
+  (`https://www.vinted.pt`, `vinted.pt`, or `*.vinted.pt`), and on the devices on your network you granted it. A page on
   one of them loads its images, scripts and sign-in frames from anywhere, never from your network.
   Saving a login restarts that agent's browser (a few seconds); saving a site restarts them all.
 - Agents can't run their own code in the browser: a guard in front of the browsers drops Playwright's tools that
@@ -340,8 +342,8 @@ stores them encrypted (AES-256-GCM) in `DATA_DIR/vault`, which no other containe
 Nothing on your network is reachable by default. It all happens in the chat, no separate settings page:
 
 1. **Ask the agent** ("check my Home Assistant at 192.168.1.50"). It calls `request_network_access` with the
-   address (one IP and one port, or a URL; never a whole network), why, read-only or full, and whether its browser
-   needs it too. You get a card: *Grant access* gives that agent exactly that; *No* adds nothing.
+   address (one IP and one port, or a URL; never a whole network), why, and read-only or full.
+   One grant covers its commands (`lan`, `lan-ssh`) and its browser alike. You get a card: *Grant access* gives that agent exactly that; *No* adds nothing.
 2. **Keys, when a device needs one.** The agent calls `request_device_key` and you get a second card: paste the
    API key or token (Home Assistant's long-lived token, a TrueNAS API key, `user:password` for Basic auth), or for
    SSH tap *Make a key*, add the public key it shows to the device's authorized keys, then *Done, I added it* (or
@@ -355,7 +357,7 @@ commands still needs your OK unless a rule allows it. Always `http://`, even for
 the https and adds the key. Read-only is GET only; full access also allows changes, tunnels and ssh. Agents see what
 they have with `network_access`; `agents lan` lists every device and who may reach it.
 
-**In an agent's browser** (agents with the browser, granted with *its browser too*): it opens `http://IP:PORT/`
+**In an agent's browser** (agents with the browser: every device granted to them): it opens `http://IP:PORT/`
 (a router's admin page, for example), with no OK per page, while its commands still ask. Signing in with a form
 needs full access; the agent asks for the values with `request_login` like any site. Each browser reaches only its
 own agent's devices, through the gateway, which logs every request.

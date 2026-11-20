@@ -1,4 +1,4 @@
-# Builds the claude-agents and firewall images for amd64 + arm64 and pushes them to GHCR,
+# Builds the claude-agents, firewall and browser images for amd64 + arm64 and pushes them to GHCR,
 # so the stack can be deployed from a Docker UI without a checkout of this repo.
 name: images
 
@@ -24,6 +24,9 @@ jobs:
           - name: claude-agents-firewall
             context: firewall
             dockerfile: firewall/Dockerfile
+          - name: claude-agents-browser
+            context: browser
+            dockerfile: browser/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3

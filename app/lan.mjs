@@ -22,7 +22,7 @@
 //     The vault hands this gateway only those (an in-memory folder, LAN_LOGINS_DIR/<agent>.json); ssh gets the password
 //     from lan-askpass here, so it never reaches the agent either. `lan-ssh --sudo NAME` runs the command with sudo on
 //     the device, and this gateway types such a login into sudo's prompt (sudo -S), once, only when sudo asks
-//   - an agent's browser: for each grant you also tick whether its browser may open that device. The browser container
+//   - an agent's browser: every device granted to an agent also opens in its browser, if it has one. The browser container
 //     reaches this gateway on a network of its own (internal, only the two of them: LAN_BROWSER_IP), and the guard there
 //     sends only the private addresses its agent was given here (browser/mcp-guard.mjs). Same modes: read-only is GET,
 //     HEAD and OPTIONS. A device that speaks https is opened as http:// (the gateway does the https), so a self-signed
@@ -133,10 +133,9 @@ export function lanClient(url = process.env.LAN_URL || `http://lan:${LAN_PORT}`)
     removeSsh: (id) => call("DELETE", `/_control/targets/${id}/ssh`),
     /** Forget the device's pinned host key: the next ssh trusts whatever it presents. */
     forgetHostKey: (id) => call("DELETE", `/_control/targets/${id}/host-key`),
-    /** Exactly these targets for this agent: { target: "read" | "full" }. browser: the ids its browser may open too
-     *  (omitted: those it already had, among these targets). */
-    grant: (agent, targets, browser) => call("PUT", `/_control/grants/${agent}`, { targets, ...(browser ? { browser } : {}) }),
-    /** What an agent may reach, with the mode it gets (never more than the target's own) and browser: true when its browser may too. */
+    /** Exactly these targets for this agent: { target: "read" | "full" }, from its commands and its browser alike. */
+    grant: (agent, targets) => call("PUT", `/_control/grants/${agent}`, { targets }),
+    /** What an agent may reach, with the mode it gets (never more than the target's own). */
     forAgent: async (agent) => (await call("GET", `/_control/agents/${agent}`)).targets,
     /** A token for one command: cap "read" or "full". Returns the proxy address for LAN_PROXY, or null when it has no targets. */
     async open(agent, cap, seconds) {
@@ -292,10 +291,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   /** The targets an agent may reach now, with its mode on each. */
   const reach = (agent, cap = "full") => Object.entries(db.grants[agent] ?? {})
     .filter(([id]) => db.targets[id])
-    .map(([id, mode]) => ({ ...db.targets[id], mode: lower(db.targets[id].mode, mode, cap), browser: (db.browser[agent] ?? []).includes(id) }));
+    .map(([id, mode]) => ({ ...db.targets[id], mode: lower(db.targets[id].mode, mode, cap), browser: true })); // its commands and its browser alike
   /** What each agent's browser may open: { agent: [{ host, port, tls, mode }] }. Names and addresses only. */
-  const browserReach = () => Object.fromEntries(Object.keys(db.browser).map((agent) => [agent,
-    reach(agent).filter((t) => t.browser).map(({ host, port, tls, mode }) => ({ host, port, tls: !!tls, mode }))]).filter(([, l]) => l.length));
+  const browserReach = () => Object.fromEntries(Object.keys(db.grants).map((agent) => [agent,
+    reach(agent).map(({ host, port, tls, mode }) => ({ host, port, tls: !!tls, mode }))]).filter(([, l]) => l.length));
   /** host:port pairs the firewall must open for this container: every target granted to at least one agent. */
   const allowList = () => [...new Set(Object.values(db.grants).flatMap((g) => Object.keys(g)).filter((id) => db.targets[id])
     .map((id) => `${db.targets[id].host}:${db.targets[id].port}`))].sort();
@@ -395,9 +394,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         next[id] = mode;
       }
       if (Object.keys(next).length) db.grants[m[1]] = next; else delete db.grants[m[1]];
-      const browser = (Array.isArray(body.browser) ? body.browser.map(String) : db.browser[m[1]] ?? []).filter((id) => next[id]);
-      if (browser.length) db.browser[m[1]] = [...new Set(browser)]; else delete db.browser[m[1]];
-      persist(); log(`${m[1]} may reach ${Object.entries(next).map(([id, md]) => `${id} (${md}${browser.includes(id) ? ", browser too" : ""})`).join(", ") || "nothing"}`);
+      delete db.browser[m[1]]; // every grant opens in its browser too: no separate list any more
+      persist(); log(`${m[1]} may reach ${Object.entries(next).map(([id, md]) => `${id} (${md})`).join(", ") || "nothing"}`);
       return send(res, 200, { targets: reach(m[1]).map(publicTarget) });
     }
     if (req.method === "POST" && p === "/tokens") {

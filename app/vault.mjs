@@ -210,7 +210,7 @@ async function handle(req, res) {
     const { add, remove, describe, note } = await readJson(req);
     if (add != null) {
       const rule = siteRule(add);
-      if (!rule && deviceOf(add)) fail(400, `${add} is a device on your network: ask the agent in its chat: it asks you for access to it there (with browser: true)`);
+      if (!rule && deviceOf(add)) fail(400, `${add} is a device on your network: ask the agent in its chat: it asks you for access to it there`);
       if (!rule) fail(400, `“${add}” isn't a website: use an address like https://www.vinted.pt, a host like vinted.pt, or *.vinted.pt`);
       if (!vault.sites.includes(rule) && !stackSites.includes(rule)) {
         if (vault.sites.length >= MAX_SITES) fail(400, `At most ${MAX_SITES} sites`);

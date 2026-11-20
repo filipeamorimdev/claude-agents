@@ -17,6 +17,7 @@ services:
     image: ${COMPOSE_PROJECT_NAME}-firewall:local
     container_name: ${COMPOSE_PROJECT_NAME}-firewall
   browser:
+    image: ${COMPOSE_PROJECT_NAME}-browser:local
     container_name: ${COMPOSE_PROJECT_NAME}-browser
   vault:
     image: ${COMPOSE_PROJECT_NAME}:local

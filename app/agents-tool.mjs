@@ -293,18 +293,18 @@ export function makeSelfHandlers(ctx) {
           your_logins: logins.filter((l) => l.agents.includes(caller)).map((l) => ({ name: l.name, site: l.site || null })),
           sites_the_browser_can_open: sites.map((s) => s.rule),
           devices_on_the_humans_network_your_browser_can_open: await (async () => {
-            try { return ctx.lan ? (await ctx.lan.forAgent(caller)).filter((t) => t.browser).map((t) => `http://${t.host}:${t.port}/ (${t.name}, ${t.mode === "full" ? "full" : "read-only"})`) : []; }
+            try { return ctx.lan ? (await ctx.lan.forAgent(caller)).map((t) => `http://${t.host}:${t.port}/ (${t.name}, ${t.mode === "full" ? "full" : "read-only"})`) : []; }
             catch { return []; }
           })(),
           how_to_use: "To sign in, type a login's NAME (e.g. VINTED_PASSWORD) into the form field: the browser types the real value. " +
             "You never see or ask for values, and you can use only the logins listed here. If what you need isn't here, call request_login. " +
-              "A device on the human's network that isn't listed: call request_network_access with browser: true first.",
+              "A device on the human's network that isn't listed: call request_network_access first.",
         }, null, 2));
       } catch (e) { return text(e.message, true); }
     },
 
     request_login: async ({ site, fields, reason, failed = false }) => {
-      // A website, or a device on the human's network that its browser was given (request_network_access with browser).
+      // A website, or a device on the human's network that granted to it (request_network_access).
       const device = deviceOf(site);
       const origin = loginSite(site);
       if (!origin) return text(`"${site}" isn't a website address or a device on the human's network. Pass the address, e.g. https://www.vinted.pt or http://192.168.1.1:8443`, true);
@@ -318,7 +318,7 @@ export function makeSelfHandlers(ctx) {
         let mine = [];
         try { mine = ctx.lan ? await ctx.lan.forAgent(caller) : []; } catch { mine = []; }
         const t = mine.find((x) => x.host === device.host && x.port === device.port);
-        if (!t?.browser) return text(`Your browser can't open ${device.host}:${device.port} yet. Call request_network_access for it with browser: true ` +
+        if (!t) return text(`Your browser can't open ${device.host}:${device.port} yet. Call request_network_access for it ` +
           "(and access \"full\": a sign-in form is a POST) first, then ask for the login.", true);
         allowed = true;
       } else allowed = siteAllowed(origin, listing.sites.map((s) => s.rule));
@@ -443,7 +443,7 @@ export function makeSelfHandlers(ctx) {
       };
       return text(JSON.stringify({
         your_network_targets: targets.map((t) => ({ name: t.name, address: `${t.host}:${t.port}`, access: t.mode === "full" ? "full" : "read-only (GET, HEAD, OPTIONS)",
-          in_your_browser: ctx.vault ? (t.browser ? `open http://${t.host}:${t.port}/` : "no (ask with request_network_access, browser: true)") : undefined,
+          in_your_browser: ctx.vault ? `open http://${t.host}:${t.port}/` : undefined,
           service: t.preset !== "other" ? t.preset : undefined, credential_added_for_you: t.credential ? t.credential.header : undefined,
           ssh: sshOf(t),
           note: t.note || undefined })),
@@ -467,28 +467,26 @@ export function makeSelfHandlers(ctx) {
       }, null, 2));
     },
 
-    // Asks the human to let this agent reach one device (one IP, one port), from its commands and, if it asks, from its
-    // browser. Waits for their answer in the chat; on a yes, the device becomes a target in the LAN gateway (or the
+    // Asks the human to let this agent reach one device (one IP, one port), from its commands and its browser alike. Waits for their answer in the chat; on a yes, the device becomes a target in the LAN gateway (or the
     // existing one for that address is reused) and is granted to this agent, never more than the human approved.
     // A credential or SSH key is still the human's to add.
-    request_network_access: async ({ host, port, access = "read", name, https, browser = false, reason }, extra) => {
+    request_network_access: async ({ host, port, access = "read", name, https, reason }, extra) => {
       if (!ctx.lan) return text("The home network gateway isn't set up here.", true);
       // "10.0.0.1", "10.0.0.1:8443" or "https://10.0.0.1:8443/Main_Login.asp" all work; an explicit port wins.
       const addr = deviceOf(port ? `${/^https?:\/\//i.test(String(host)) ? String(host).replace(/(\/\/[^/:]+)(:\d+)?/, `$1:${port}`) : `${String(host).replace(/:\d+$/, "")}:${port}`}` : host);
       if (!addr) return text(`"${host}" isn't one device on the human's network: give its private IPv4 address and port, e.g. 192.168.1.50 and 8123.`, true);
       const tls = https ?? addr.tls;
-      const wantBrowser = !!browser && !!ctx.vault;
+      const wantBrowser = !!ctx.vault; // it has a browser: a device it reaches opens there too
       const { errors, target: wanted } = validateTarget({ id: "xx", host: addr.host, port: addr.port, mode: access, name: name || addr.host, tls, preset: "other" });
       if (errors.length) return text(`Can't ask for that:\n- ${errors.join("\n- ")}`, true);
       let state;
       try { state = await ctx.lan.state(); } catch (e) { return text(e.message, true); }
       const existing = state.targets.find((t) => t.host === wanted.host && t.port === wanted.port);
       const granted = { ...(state.grants?.[caller] ?? {}) };
-      const inBrowser = new Set(state.browser?.[caller] ?? []);
       const now = existing && granted[existing.id] ? (granted[existing.id] === "full" && existing.mode === "full" ? "full" : "read") : null;
-      if ((now === "full" || now === access) && (!wantBrowser || inBrowser.has(existing.id))) {
+      if (now === "full" || now === access) {
         return text(`You already have ${now === "full" ? "full" : "read-only"} access to ${existing.name} (${existing.host}:${existing.port})` +
-          `${inBrowser.has(existing.id) ? ", from your browser too" : ""}: see network_access.`);
+          `${wantBrowser ? ", from your browser too" : ""}: see network_access.`);
       }
       const label = `${wanted.host}:${wanted.port}`;
       const why = String(reason ?? "").replace(/\s+/g, " ").trim();
@@ -526,8 +524,7 @@ export function makeSelfHandlers(ctx) {
           store.event(by, "lan-target", null, { id: target.id, name: target.name, host: target.host, port: target.port, mode: "full", tls: target.tls, for: caller });
         }
         if (granted[target.id] !== "full") granted[target.id] = access;
-        if (wantBrowser) inBrowser.add(target.id);
-        const after = await ctx.lan.grant(caller, granted, [...inBrowser]);
+        const after = await ctx.lan.grant(caller, granted);
         store.event(by, "lan-grant", caller, { targets: after.targets.map((t) => ({ id: t.id, mode: t.mode, browser: !!t.browser })) });
         const httpUrl = `http://${label}/`;
         return text(`Approved${r.note ? `, with a note: "${r.note}"` : ""}. You can reach ${target.name} (${label}) ${access === "full" ? "with full access" : "read-only"} ` +
@@ -689,7 +686,7 @@ function selfTools(ctx) {
     ["request_network_access",
       "Ask the human to let you reach ONE device on their home network (one private IP and one port, e.g. a router's web UI or ssh). " +
       "They approve it in the chat; this waits for their answer. On a yes it shows up in network_access and you use it with `lan …` in run_command, " +
-      "and, with browser: true, in your browser at http://IP:PORT/. " +
+      "and, if you have a browser, in it at http://IP:PORT/. " +
       "Ask read-only unless you must change something; ask once per port you need (e.g. 8443 for the web UI, 22 for ssh).",
       {
         host: z.string().max(300).describe('The device\'s private IPv4 address, or its address with a port or as a URL: "10.0.0.1", "10.0.0.1:8443", "https://10.0.0.1:8443/Main_Login.asp" (no names, no subnets)'),
@@ -697,7 +694,6 @@ function selfTools(ctx) {
         access: z.enum(["read", "full"]).optional().describe('"read" (GET/HEAD/OPTIONS only, the default) or "full" (any method, sign-in forms, https tunnels, ssh)'),
         name: z.string().max(60).optional().describe('What it is, e.g. "ASUS router"'),
         https: z.boolean().optional().describe("Whether the service speaks https (default: from the address; https:// or port 443/8443). The gateway speaks https to it, you still write http://"),
-        browser: z.boolean().optional().describe("true to open it in your browser too (a web admin page), not only from commands"),
         reason: z.string().min(5).max(300).describe("Why you need it, in the human's language (shown to them)"),
       },
       h.request_network_access],
