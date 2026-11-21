@@ -6,6 +6,8 @@
 //     Only this container mounts /vault (DATA_DIR/vault); the agents' container doesn't.
 //   - its API (internal network only, no published port) saves, lists and deletes logins and the sites
 //     the browser may open, but never returns a value. The chat UI sends what you type straight here.
+//     Every call but /health must be signed with the app's control key (control.mjs): other containers on its
+//     network, and an agent's own commands inside the app's container, can't list, grant or change anything
 //   - each login lists the agents that may use it (grants): no grant, no use. Saving a login an agent
 //     asked for grants it to that agent; the chat UI changes the rest.
 //   - it writes the decrypted logins to the in-memory folder it shares with the browser, one file per agent
@@ -23,6 +25,7 @@ import crypto from "node:crypto";
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { LOGIN_NAME_RE, AGENT_NAME_RE, MAX_LOGIN_VALUE, loginSite, siteRule, deviceOf } from "./logins.mjs";
+import { verifier } from "./control.mjs";
 
 const DIR = process.env.VAULT_DIR || "/vault";
 const OUT = process.env.VAULT_OUT || "/run/browser-secrets";
@@ -140,14 +143,19 @@ const agentList = (agents) => {
 
 const send = (res, code, body) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(body)); };
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
-// JSON only: a web page can't send that to the vault without asking first (CORS), and the vault never says yes.
-const readJson = (req) => new Promise((resolve, reject) => {
-  if (!(req.headers["content-type"] ?? "").startsWith("application/json")) return reject(Object.assign(new Error("expected JSON"), { code: 415 }));
+const BODY_MAX = 16 * 1024;
+const readRaw = (req) => new Promise((resolve, reject) => {
   const chunks = []; let size = 0;
-  req.on("data", (c) => { size += c.length; if (size > 16 * 1024) { reject(Object.assign(new Error("too large"), { code: 413 })); req.destroy(); } else chunks.push(c); });
-  req.on("end", () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString() || "{}")); } catch { reject(Object.assign(new Error("invalid JSON"), { code: 400 })); } });
+  req.on("data", (c) => { size += c.length; if (size > BODY_MAX) { reject(Object.assign(new Error("too large"), { code: 413 })); req.destroy(); } else chunks.push(c); });
+  req.on("end", () => resolve(Buffer.concat(chunks).toString()));
   req.on("error", reject);
 });
+// JSON only (a web page can't send that without asking first, CORS, and the vault never says yes), and signed anyway.
+const parseJson = (req, raw) => {
+  if (!(req.headers["content-type"] ?? "").startsWith("application/json")) fail(415, "expected JSON");
+  try { return JSON.parse(raw || "{}"); } catch { return fail(400, "invalid JSON"); }
+};
+const signed = verifier();
 
 const listing = () => ({
   logins: [
@@ -162,12 +170,18 @@ async function handle(req, res) {
   const url = new URL(req.url, "http://x");
   const m = url.pathname.match(/^\/logins\/([^/]+)$/);
   if (req.method === "GET" && url.pathname === "/health") return send(res, 200, { ok: true });
+  const raw = await readRaw(req);
+  if (!signed(req, raw)) {
+    log(`refused an unsigned ${req.method} ${url.pathname} from ${String(req.socket.remoteAddress ?? "").replace(/^::ffff:/, "")}`);
+    return send(res, 403, { error: "only the app" });
+  }
+  const readJson = () => parseJson(req, raw);
   if (req.method === "GET" && url.pathname === "/logins") return send(res, 200, listing());
 
   if (req.method === "PUT" && m) {
     const name = m[1];
     if (!LOGIN_NAME_RE.test(name)) fail(400, "Name: capital letters, digits and _, starting with a letter (e.g. VINTED_PASSWORD)");
-    const { value, site = "", grant = [] } = await readJson(req);
+    const { value, site = "", grant = [] } = readJson();
     const granted = agentList(grant);
     if (typeof value !== "string" || !value) fail(400, `Type a value for ${name}`);
     if (value.length > MAX_LOGIN_VALUE) fail(400, `${name} is too long`);
@@ -198,7 +212,7 @@ async function handle(req, res) {
   if (req.method === "POST" && g) {
     const name = g[1];
     if (!vault.logins[name] && !stackLogins[name]) fail(404, `No login called ${name}`);
-    const agents = agentList((await readJson(req)).agents);
+    const agents = agentList((readJson()).agents);
     if (agents.length) vault.grants[name] = agents; else delete vault.grants[name];
     persist(); publish();
     log(`${name} may be used by ${agents.join(", ") || "no agent"}`);
@@ -207,7 +221,7 @@ async function handle(req, res) {
 
   if (req.method === "POST" && url.pathname === "/sites") {
     // { add, note? }, { remove }, or { describe: rule, note }: what a site is for ("" removes the note).
-    const { add, remove, describe, note } = await readJson(req);
+    const { add, remove, describe, note } = readJson();
     if (add != null) {
       const rule = siteRule(add);
       if (!rule && deviceOf(add)) fail(400, `${add} is a device on your network: ask the agent in its chat: it asks you for access to it there`);

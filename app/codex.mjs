@@ -22,6 +22,8 @@ import { mkdir, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { createAgentsMcpServer, createSelfMcpServer } from "./agents-tool.mjs";
 import { usesLogins, AGENT_HEADER } from "./logins.mjs";
+import { agentTokens, AGENT_TOKEN_HEADER } from "./control.mjs";
+const tokenOf = agentTokens(); // an agent's token for the browser's guard (control.mjs)
 import { APPROVAL_MINUTES } from "./store.mjs";
 
 // Installed outside /app (see Dockerfile): the sandbox hides /app, and Codex re-runs its own binary inside it.
@@ -88,7 +90,7 @@ function mcpServers(agent, registry, env, endpoints, log) {
       log(agent.name, `MCP server "${name}" is not in config/mcp-servers.mjs, skipped`);
     } else if (c.url && (c.type ?? "http") === "http") {
       // A browser with vault logins learns who is calling (see engine.mjs).
-      const headers = { ...c.headers, ...(usesLogins([t], registry) ? { [AGENT_HEADER]: agent.name } : {}) };
+      const headers = { ...c.headers, ...(usesLogins([t], registry) ? { [AGENT_HEADER]: agent.name, [AGENT_TOKEN_HEADER]: tokenOf(agent.name) } : {}) };
       servers[name] = { url: c.url, tool_timeout_sec: 300, ...approve,
         ...(Object.keys(headers).length ? { env_http_headers: Object.fromEntries(Object.entries(headers).map(([h, v]) => [h, viaEnv(v)])) } : {}) };
     } else if (c.command) {

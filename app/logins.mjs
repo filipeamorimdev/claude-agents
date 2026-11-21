@@ -11,6 +11,7 @@ export const AGENT_NAME_RE = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/;
 export const AGENT_HEADER = "X-Agent";
 export const MAX_LOGIN_VALUE = 4096;
 import { deviceOf } from "./address.mjs";
+import { signer } from "./control.mjs";
 export { deviceOf };
 export { parseAddress } from "./address.mjs";
 const HOST_RE = /^(\*\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/;
@@ -66,14 +67,15 @@ export async function waitUntilUp(url, ms = 30_000) {
   return false;
 }
 
-/** The vault's API. It never returns a value: list gives names, sites and where each came from. */
+/** The vault's API. It never returns a value: list gives names, sites and where each came from. Every call is signed (control.mjs). */
 export function vaultClient(url = process.env.VAULT_URL || "http://vault:8932") {
+  const sign = signer();
   const call = async (method, p, body) => {
+    const text = body ? JSON.stringify(body) : "";
+    const headers = { ...(body ? { "Content-Type": "application/json" } : {}), ...sign(method, p, text) };
     let res;
     try {
-      res = await fetch(url + p, {
-        method, headers: body ? { "Content-Type": "application/json" } : {}, body: body && JSON.stringify(body), signal: AbortSignal.timeout(5000),
-      });
+      res = await fetch(url + p, { method, headers, body: body ? text : undefined, signal: AbortSignal.timeout(5000) });
     } catch {
       throw Object.assign(new Error("The vault isn't running: the human should check the claude-agents-vault container (its logs), or redeploy the stack"), { code: 503 });
     }

@@ -160,9 +160,12 @@ Open `http://<server-ip>:8090` and sign in.
   Activity as *Auto-approved by rule #N*. Agents can't
   add rules. **Read-only commands** (a switch in the same place, off by default): commands that only read inside
   the agent's own folder (`ls`, `cat`, `grep`, `rg`, `find`, `jq`, `wc`, `du`, `diff`, `sort`…, alone or piped) run
-  without asking, with no network. Anything that writes or deletes, uses the internet or your
-  devices (`curl`, `lan`, `ssh`), looks outside its folder (`..`, `~`, other paths), or can run other programs
-  (`git`, `sed`, `awk`, `find -exec`, scripts) still asks. CLI: `agents commands <name> read-only on|off`,
+  without asking, with no network. So do reads on the devices you granted it: one plain read-only command over ssh
+  (`lan-ssh pi df -h`, `cat`, `ls`, `systemctl status`, `journalctl`, `docker ps`, `ip addr`…) and GETs with
+  `lan curl -s http://<device>/...`; the gateway still lets it reach only those devices. Anything that writes,
+  deletes, restarts or changes something (here or on a device), uses `--sudo`, names private data (keys, passwords,
+  tokens, `.env`, `.ssh`, `shadow`…), uses the internet, looks outside its folder (`..`, `~`, other paths), or can
+  run other programs (`git`, `sed`, `awk`, `find -exec`, scripts) still asks. CLI: `agents commands <name> read-only on|off`,
   `agents commands <name>`, `agents commands <name> allow [--prefix] [--lan read|full] <command>`,
   `agents commands remove <id>`.
 - **Your home network**: agents can't reach anything there until they ask in the chat and you grant that one
@@ -330,9 +333,12 @@ stores them encrypted (AES-256-GCM) in `DATA_DIR/vault`, which no other containe
   because some sign-in pages (OLX's, Vinted's) refuse any browser Playwright drives and show a person a slider check at
   most: drag on the picture to slide it. What you sign in to stays in its profile; it gets its own browser back when you
   answer the card. A browser restart (new logins, a takeover) keeps the agent's session going.
-- **It looks like an ordinary browser here**: Chromium's normal user agent (CloudFront sites like OLX and Wallapop
-  answer "HeadlessChrome" with a 403), in `BROWSER_LOCALE` (pt-PT) and `BROWSER_TIMEZONE` (the stack's `TZ`).
-  Nothing else is hidden: it's still a Playwright browser, and sites that check for that can still tell.
+- **It runs as a full, headed browser**: each one gets a virtual screen of its own (Xvfb in the browser image,
+  `BROWSER_SCREEN`, 1366x768) instead of running headless, which sites spot ("HeadlessChrome" in the user agent,
+  which CloudFront sites like OLX and Wallapop answer with a 403; a screen smaller than the window; one language).
+  It uses `BROWSER_LOCALE` (pt-PT, so it sends `pt-PT,pt,en-US,en` like a Chrome set to Portuguese) and
+  `BROWSER_TIMEZONE` (the stack's `TZ`). Nothing is faked: its graphics are software (SwiftShader), and it's still a
+  Playwright browser, so sites that check for that can still tell. `BROWSER_HEADLESS=1` goes back to headless.
 - The browser opens pages only on its sites, listed in the agent's details under *What it can reach* → *In its
   browser*: `BROWSER_ALLOWED_ORIGINS` plus the ones you add there or allow when saving a login it asked for
   (`https://www.vinted.pt`, `vinted.pt`, or `*.vinted.pt`), and on the devices on your network you granted it. A page on

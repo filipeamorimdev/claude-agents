@@ -20,6 +20,7 @@ import { vapidKeys, connect, validateSubscription, sendCode, checkCode, testDevi
 import { iconPng } from "./icon.mjs";
 import { siteRule, siteAllowed, waitUntilUp, usesLogins, AGENT_NAME_RE, deviceOf } from "./logins.mjs";
 import { PRESETS, TARGET_ID_RE, LAN_MODES, validateTarget } from "./lan.mjs";
+import { signer } from "./control.mjs";
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "ui");
 const UI_FILE = path.join(UI_DIR, "index.html");
@@ -684,11 +685,17 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
     return u ? new URL(u).origin : null;
   };
   const controlled = new Map(); // agent -> when its "took control" was last logged
+  // The guard's live view takes signed calls only (control.mjs): nothing else on its network can watch or drive a browser.
+  const signLive = signer();
+  const liveCall = (base, name, what, body) => fetch(`${base}/live/${name}/${what}`, body == null
+    ? { headers: signLive("GET", `/live/${name}/${what}`), signal: AbortSignal.timeout(8000) }
+    : { method: "POST", headers: { "Content-Type": "application/json", ...signLive("POST", `/live/${name}/${what}`, body) }, body,
+      signal: AbortSignal.timeout(what === "hands" ? 45_000 : 8000) });
   route("GET", "/api/browser/([a-z0-9-]+)/shot", async (req, res, [name]) => {
     const base = guardOf(name);
     if (!base) return send(res, 404, { error: `${name} has no browser` });
     let r;
-    try { r = await fetch(`${base}/live/${name}/shot`, { signal: AbortSignal.timeout(8000) }); }
+    try { r = await liveCall(base, name, "shot"); }
     catch { return send(res, 503, { error: "The browser isn't reachable. Is it running (COMPOSE_PROFILES=browser)?" }); }
     if (!r.ok) return send(res, r.status, await r.json().catch(() => ({ error: `The browser answered ${r.status}` })));
     res.writeHead(200, {
@@ -705,7 +712,7 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
     if (Date.now() - (controlled.get(name) ?? 0) > 10 * 60e3) { controlled.set(name, Date.now()); store.event("human (ui)", "browser-control", name); }
     let r;
     try {
-      r = await fetch(`${base}/live/${name}/input`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal: AbortSignal.timeout(8000) });
+      r = await liveCall(base, name, "input", JSON.stringify(input));
     } catch { return send(res, 503, { error: "The browser isn't reachable" }); }
     send(res, r.status, await r.json().catch(() => ({})));
   });
@@ -716,8 +723,7 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
     const base = guardOf(name);
     if (!base) return { status: 404, body: { error: `${name} has no browser` } };
     try {
-      const r = await fetch(`${base}/live/${name}/hands`, { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ on }), signal: AbortSignal.timeout(45_000) });
+      const r = await liveCall(base, name, "hands", JSON.stringify({ on }));
       return { status: r.status, body: await r.json().catch(() => ({})) };
     } catch { return { status: 503, body: { error: "The browser isn't reachable" } }; }
   };

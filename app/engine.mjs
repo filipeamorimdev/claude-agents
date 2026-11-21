@@ -35,6 +35,7 @@ import { notifyRun, notifyAction } from "./notify.mjs";
 import { createTasks } from "./tasks.mjs";
 import { turnsFor, providerOf, ruleFor, WRITE_TOOL_NAMES } from "./store.mjs";
 import { vaultClient, usesLogins, AGENT_HEADER } from "./logins.mjs";
+import { agentTokens, AGENT_TOKEN_HEADER } from "./control.mjs";
 import { shellClient } from "./shell.mjs";
 import { lanClient, privateHost } from "./lan.mjs";
 
@@ -123,6 +124,7 @@ export function createEngine({ store, registry, dataDir, tz, log = console.log }
   const pending = new Set(); // notifications being sent, run logs being closed
   const resets = new Map(); // agent -> times its chat was reset: a run that began before a reset doesn't save its session
   const vault = vaultClient();
+  const tokenOf = agentTokens(); // the agent's token for the browser's guard (control.mjs)
   const shell = shellClient();
   const lan = lanClient();
   // Set by whoever shows things live (runner.mjs): post adds a chat message, running/progress show what an agent is doing.
@@ -314,7 +316,7 @@ export function createEngine({ store, registry, dataDir, tz, log = console.log }
       } else if (registry[server]) {
         // A browser with vault logins learns who is calling, so its guard lets the agent type only its own logins.
         const c = registry[server].config;
-        mcpServers[server] = usesLogins([t], registry) && c.url ? { ...c, headers: { ...c.headers, [AGENT_HEADER]: name } } : c;
+        mcpServers[server] = usesLogins([t], registry) && c.url ? { ...c, headers: { ...c.headers, [AGENT_HEADER]: name, [AGENT_TOKEN_HEADER]: tokenOf(name) } } : c;
       } else {
         log(name, `MCP server "${server}" is not in config/mcp-servers.mjs, skipped`);
       }

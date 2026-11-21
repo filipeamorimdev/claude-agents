@@ -5,7 +5,9 @@
 // One agent can't use another's sign-ins, and never holds a login it wasn't granted. A browser starts on
 // the agent's first call, restarts when its logins or the sites change (Playwright reads them only at
 // startup), and stops after BROWSER_IDLE_MINUTES without use. At most BROWSER_MAX_AGENTS run at once.
-// The app names the agent in a header it sets on the connection (X-Agent); a call without one is refused.
+// The app names the agent in a header it sets on the connection (X-Agent), with that agent's token (X-Agent-Token,
+// the app's signature of its name, control.mjs); a call without both, or whose token is another agent's, is refused.
+// So nothing else on its network, and no agent's own commands, can drive another agent's browser.
 //
 // It also removes the tools that would let an agent read saved logins:
 //   - browser_run_code_unsafe: runs code in the server's Node process, which can read the logins file
@@ -18,6 +20,7 @@
 // The live view: each browser also listens for the DevTools protocol on a 127.0.0.1 port only the guard reaches.
 // The app (with the chat login) gets a picture of the agent's page from /live/<agent>/shot, and sends the
 // human's clicks and typing to /live/<agent>/input when they take over (e.g. a captcha the agent can't pass).
+// Those calls must be signed with the app's control key (control.mjs), like its calls to the sandbox.
 //
 // Your network: an agent's browser can open the devices you let it reach from its browser (request_network_access with browser, approved in the chat), and nothing
 // else there. The guard asks the LAN gateway for that list (LAN_PROXY_URL, on a network only the gateway and this
@@ -25,10 +28,13 @@
 // which hands them to the gateway in the agent's name. The gateway checks the device, the mode and logs each request.
 // Every other address goes out directly, as before; navigation.cjs still refuses every other private address.
 //
-// How it presents itself: headless Chromium says "HeadlessChrome" in its user agent, and CloudFront's bot rules (OLX,
-// Wallapop) answer that with a 403 before any page loads. Each browser gets the same Chromium's ordinary user agent,
-// and the human's language and timezone (BROWSER_LOCALE, BROWSER_TIMEZONE) instead of en-US and UTC. Nothing else is
-// disguised: it's still a browser driven by Playwright, and a site that checks for that still sees it.
+// How it presents itself: each browser runs headed, as on a desktop, on a virtual screen of its own (Xvfb, from the
+// browser image; BROWSER_SCREEN, 1366x768 by default), in the human's languages and timezone (BROWSER_LOCALE,
+// BROWSER_TIMEZONE). Headless Chromium gives itself away: "HeadlessChrome" in its user agent (CloudFront's bot rules on
+// OLX and Wallapop answer that with a 403), a screen smaller than its window, a single language. With an older image
+// that has no Xvfb it falls back to headless with Chromium's ordinary user agent. Nothing is faked: the graphics are
+// software (SwiftShader) unless the server's GPU is passed in, and it's still a browser driven by Playwright, which a
+// site that checks for that still sees.
 //
 // Hands-on: some sign-in pages (OLX's, Vinted's) refuse any browser Playwright drives, and show a person a slider
 // check at most. When the human takes control during a takeover, the guard closes the agent's Playwright browser and
@@ -47,6 +53,9 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { readFileSync, existsSync, writeFileSync, rmSync } from "node:fs";
+// control.mjs sits next to this file in /guard (init.sh copies it there), and one folder up in the repository.
+const { verifier, agentTokenVerifier, AGENT_TOKEN_HEADER } = await import(
+  existsSync(new URL("./control.mjs", import.meta.url)) ? "./control.mjs" : "../control.mjs");
 
 const BLOCKED = new Set(["browser_run_code_unsafe", "browser_evaluate", "browser_network_request", "browser_network_requests"]);
 const PORT = Number(process.env.MCP_GUARD_PORT || 8931);
@@ -73,8 +82,42 @@ const USER_AGENT = (() => {
 })();
 const LOCALE = process.env.BROWSER_LOCALE || "pt-PT";
 const TIMEZONE = process.env.BROWSER_TIMEZONE || process.env.TZ || "Europe/Lisbon";
-const contextOptions = { locale: LOCALE, timezoneId: TIMEZONE, ...(USER_AGENT ? { userAgent: USER_AGENT } : {}) };
 const CHROMIUM = SERVER_ARGS.find((a) => a.startsWith("--executable-path="))?.slice("--executable-path=".length) || "chromium";
+// Headed on a virtual screen when the image has Xvfb (BROWSER_HEADLESS=1 keeps the old headless mode).
+const XVFB = "/usr/bin/Xvfb";
+const HEADED = existsSync(XVFB) && process.env.BROWSER_HEADLESS !== "1";
+const [SCREEN_W, SCREEN_H] = (/^(\d{3,4})x(\d{3,4})$/.exec(process.env.BROWSER_SCREEN || "") ?? [0, 1366, 768]).slice(1).map(Number);
+// The languages a Chrome set to this locale sends: pt-PT → "pt-PT,pt;q=0.9,en-US;q=0.8,en;q=0.7".
+const LANGUAGES = [...new Set([LOCALE, LOCALE.split("-")[0], "en-US", "en"])].join(",");
+const SERVER_OPTS = HEADED ? SERVER_ARGS.filter((a) => a !== "--headless") : SERVER_ARGS;
+// Headed: a real window and its own user agent; Playwright overrides neither, nor the languages (its locale option
+// would cut them to one). Headless: the ordinary user agent and the locale, as before.
+const contextOptions = HEADED ? { viewport: null, timezoneId: TIMEZONE }
+  : { locale: LOCALE, timezoneId: TIMEZONE, ...(USER_AGENT ? { userAgent: USER_AGENT } : {}) };
+/** Chromium flags both kinds of browser share. */
+const presentation = () => HEADED
+  ? [`--lang=${LOCALE}`, `--accept-lang=${LANGUAGES}`, "--window-position=0,0", `--window-size=${SCREEN_W},${SCREEN_H}`,
+    "--start-maximized", "--enable-unsafe-swiftshader"] // WebGL in software: without a GPU Chromium turns it off, which few desktops do
+  : [`--lang=${LOCALE}`, ...(USER_AGENT ? [`--user-agent=${USER_AGENT}`] : []), `--accept-lang=${LANGUAGES}`];
+
+/** A virtual screen for one browser: Xvfb picks a free display number and says it when it's ready. */
+function virtualScreen() {
+  if (!HEADED) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const child = spawn(XVFB, ["-displayfd", "3", "-screen", "0", `${SCREEN_W}x${SCREEN_H}x24`, "-nolisten", "tcp", "-nolisten", "unix", "-noreset"], // abstract socket only: no /tmp/.X11-unix,
+      { stdio: ["ignore", "ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    child.stderr.on("data", (d) => { err = (err + d).slice(-500); });
+    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("the virtual screen took too long to start")); }, 15_000);
+    child.stdio[3].on("data", (d) => {
+      out += d;
+      if (!out.includes("\n")) return;
+      clearTimeout(timer);
+      resolve({ child, display: `:${out.trim()}`, close: () => child.kill("SIGTERM") });
+    });
+    child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`the virtual screen exited (${code}): ${err.trim().split("\n").pop() || "no output"}`)); });
+  });
+}
 
 const read = (f) => { try { return readFileSync(f, "utf8"); } catch { return ""; } };
 const loginsFile = (agent) => `${SECRETS}/agents/${agent}.env`;
@@ -187,7 +230,9 @@ function start(agent, after) {
     // The DevTools port for the live view, on 127.0.0.1 only (Playwright keeps its own pipe to the browser).
     const config = `/tmp/guard-${agent}.json`;
     const devices = devicesOf(agent);
-    const args = [`--remote-debugging-port=${b.cdp}`, "--remote-debugging-address=127.0.0.1", `--lang=${LOCALE}`];
+    const args = [`--remote-debugging-port=${b.cdp}`, "--remote-debugging-address=127.0.0.1", ...presentation()];
+    b.screen = await virtualScreen();
+    if (b.stopped) throw new Error("stopped before it started");
     if (devices.length) {
       b.lanPort = await freePort();
       b.lan = await lanForwarder(agent, b.lanPort);
@@ -198,12 +243,12 @@ function start(agent, after) {
     // Chromium's lock names the container it ran in: after the container is recreated (an update, a crash) it would
     // refuse the profile as "in use". Only this guard opens it, and the agent's last browser has exited by now.
     for (const f of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) rmSync(`${PROFILES}/${agent}/${f}`, { force: true });
-    b.child = spawn(process.execPath, [CLI, ...SERVER_ARGS, `--port=${b.port}`, "--host=127.0.0.1", `--config=${config}`,
+    b.child = spawn(process.execPath, [CLI, ...SERVER_OPTS, `--port=${b.port}`, "--host=127.0.0.1", `--config=${config}`,
       `--user-data-dir=${PROFILES}/${agent}`, `--output-dir=${SHOTS}/${agent}`, "--init-page=/guard/navigation.cjs",
-      ...(existsSync(file) ? [`--secrets=${file}`] : [])], { env: { ...process.env, BROWSER_SITES: sites(), BROWSER_LAN: JSON.stringify(devices) }, stdio: ["ignore", "inherit", "inherit"] });
+      ...(existsSync(file) ? [`--secrets=${file}`] : [])], { env: { ...process.env, ...(b.screen ? { DISPLAY: b.screen.display } : {}), TZ: TIMEZONE, BROWSER_SITES: sites(), BROWSER_LAN: JSON.stringify(devices) }, stdio: ["ignore", "inherit", "inherit"] });
     b.exited = new Promise((resolve) => b.child.once("exit", resolve));
     b.exited.then(() => { if (browsers.get(agent) === b) browsers.delete(agent); });
-    log(`started ${agent}'s browser (${LOCALE}, ${TIMEZONE}) with ${logins} login(s)${devices.length ? ` and ${devices.length} device(s) on your network` : ""}`);
+    log(`started ${agent}'s browser (${HEADED ? `headed on a ${SCREEN_W}x${SCREEN_H} screen` : "headless"}, ${LOCALE}, ${TIMEZONE}) with ${logins} login(s)${devices.length ? ` and ${devices.length} device(s) on your network` : ""}`);
     return answers(b);
   })();
   b.ready.catch((e) => { if (!b.stopped) { log(`${agent}'s browser: ${e.message}`); stop(agent, b); } });
@@ -217,10 +262,10 @@ function stop(agent, b, why) {
   b.live?.close();
   b.lan?.close();
   if (why) log(`stopping ${agent}'s browser: ${why}`);
-  if (!b.child) return Promise.resolve();
+  if (!b.child) { b.screen?.close(); return Promise.resolve(); }
   b.child.kill("SIGTERM");
   const force = setTimeout(() => b.child.kill("SIGKILL"), 10_000);
-  return b.exited.finally(() => clearTimeout(force));
+  return b.exited.finally(() => { clearTimeout(force); b.screen?.close(); });
 }
 
 /** The agent's browser, started (or restarted with new logins) when needed. */
@@ -272,13 +317,13 @@ function handsOn(agent) {
       await stop(agent, old, "the human is taking it over by hand");
     }
     h.cdp = await freePort();
+    h.screen = await virtualScreen();
     if (h.stopped) throw new Error("stopped before it started");
     for (const f of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) rmSync(`${PROFILES}/${agent}/${f}`, { force: true });
-    h.child = spawn(CHROMIUM, ["--headless", "--no-sandbox", `--user-data-dir=${PROFILES}/${agent}`,
-      `--remote-debugging-port=${h.cdp}`, "--remote-debugging-address=127.0.0.1",
-      ...(USER_AGENT ? [`--user-agent=${USER_AGENT}`] : []), `--lang=${LOCALE}`, `--accept-lang=${LOCALE},${LOCALE.split("-")[0]}`,
-      `--proxy-pac-url=${HANDS_PAC}`, "--proxy-bypass-list=<-loopback>", "--no-first-run", "--no-default-browser-check",
-      "--window-size=1280,720", url], { env: { ...process.env, TZ: TIMEZONE }, stdio: "ignore" });
+    h.child = spawn(CHROMIUM, [...(HEADED ? [] : ["--headless", "--window-size=1280,720"]), "--no-sandbox", `--user-data-dir=${PROFILES}/${agent}`,
+      `--remote-debugging-port=${h.cdp}`, "--remote-debugging-address=127.0.0.1", ...presentation(),
+      `--proxy-pac-url=${HANDS_PAC}`, "--proxy-bypass-list=<-loopback>", "--no-first-run", "--no-default-browser-check", url],
+      { env: { ...process.env, ...(h.screen ? { DISPLAY: h.screen.display } : {}), TZ: TIMEZONE }, stdio: "ignore" });
     h.exited = new Promise((resolve) => h.child.once("exit", resolve));
     h.exited.then(() => { if (browsers.get(agent) === h) browsers.delete(agent); });
     for (const until = Date.now() + 20_000; Date.now() < until; await sleep(300)) {
@@ -458,6 +503,8 @@ function ownFile(agent, name) {
   return base ? `${SHOTS}/${agent}/${base}` : undefined;
 }
 
+const signedByApp = verifier();
+const agentToken = agentTokenVerifier();
 const reply = (res, status, body) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(body)); };
 // The agent's MCP sessions, by the id it holds: { agent, init (its initialize message), server (the browser entry
 // that knows it), upstream (that server's id for it) }. When its browser restarts (new logins or sites, a takeover by
@@ -494,6 +541,7 @@ http.createServer((req, res) => {
     const lv = req.url.match(/^\/live\/([a-z0-9][a-z0-9-]{1,30}[a-z0-9])\/(shot|input|hands)$/);
     // Only the app's server calls these, never a web page (a page in the human's plain Chromium could try loopback).
     if (lv && (req.headers.origin || req.headers["sec-fetch-dest"])) return reply(res, 403, { error: "not from a page" });
+    if (lv && !signedByApp(req, body.toString())) { log(`refused an unsigned live-view call for ${lv[1]}`); return reply(res, 403, { error: "only the app" }); }
     if (lv && lv[2] === "hands" && req.method === "POST") {
       let on;
       try { on = JSON.parse(body.toString()).on === true; } catch { return reply(res, 400, { error: "expected JSON" }); }
@@ -506,6 +554,10 @@ http.createServer((req, res) => {
     }
     const agent = String(req.headers["x-agent"] ?? "");
     if (!AGENT_RE.test(agent)) return reply(res, 400, { error: "No agent named: only the agents app connects to the browser" });
+    if (!agentToken(agent, req.headers[AGENT_TOKEN_HEADER.toLowerCase()])) {
+      log(`refused a call for ${agent} without its token`);
+      return reply(res, 403, { error: "Not this agent's token: only the agents app connects to the browser" });
+    }
     let messages = [], parsed;
     if (req.method === "POST") { try { parsed = JSON.parse(body); messages = [parsed].flat(); } catch { /* not JSON: the server answers */ } }
     for (const m of messages.filter((m) => m?.method === "tools/call")) {
@@ -543,6 +595,7 @@ http.createServer((req, res) => {
     try { port = await b.ready; } catch { return reply(res, 503, { error: "the browser is restarting" }); }
     const listing = messages.some((m) => m?.method === "tools/list");
     const headers = { ...req.headers, host: `127.0.0.1:${port}` };
+    delete headers[AGENT_TOKEN_HEADER.toLowerCase()];
     const sid = req.headers["mcp-session-id"];
     const sess = typeof sid === "string" ? sessions.get(sid) : null;
     if (sess && sess.agent === agent) {

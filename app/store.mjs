@@ -32,9 +32,10 @@
 
 import { DatabaseSync } from "node:sqlite";
 import crypto from "node:crypto";
+import path from "node:path";
 import cron from "node-cron";
 import { describeEvent } from "./events.mjs";
-import { validateRule, autoApproval, isReadOnly } from "./command-rules.mjs";
+import { validateRule, autoApproval, readOnlyApproval } from "./command-rules.mjs";
 
 // ---------- policy ----------
 
@@ -916,13 +917,18 @@ export function openStore(file) {
     },
     /**
      * Whether an agent's command runs without asking: { rules: [{ id, kind, pattern, lan }], lan } or null.
-     * With read-only commands on, a command that only reads in its own folder runs too: { rules: [], lan: "none",
-     * readOnly: true }.
+     * With read-only commands on, a command that only reads (in its own folder, or on a device granted to it: lan-ssh,
+     * lan curl) runs too: { rules: [], lan, readOnly: true }, lan as readOnlyApproval says.
      */
     autoApprove(agent, cmd) {
       const rules = store.commandRules(agent);
       const r = autoApproval(rules, cmd);
-      if (!r) return store.get(agent)?.readOnlyCommands && isReadOnly(cmd, agent) ? { rules: [], lan: "none", readOnly: true } : null;
+      // The agent's folder as this container sees it (next to the database), so symlinks out of it are caught too.
+      const local = path.join(path.dirname(path.resolve(file)), "workspaces", agent);
+      if (!r) {
+        const ro = store.get(agent)?.readOnlyCommands ? readOnlyApproval(cmd, agent, "/workspaces", local) : null;
+        return ro ? { rules: [], lan: ro.lan, readOnly: true } : null;
+      }
       return { rules: rules.filter((x) => r.rules.includes(x.id)), lan: r.lan };
     },
 

@@ -2,6 +2,8 @@
 # Debian, rebuilt with every image build) instead of the Chrome for Testing build in Microsoft's image.
 # The guard (app/browser/mcp-guard.mjs) comes from DATA_DIR/browsers/guard at run time, not from here,
 # and starts /app/cli.js per agent with compose.yaml's options, which point Playwright at this Chromium.
+# Xvfb gives each browser a screen of its own, so Chromium runs headed, as on a desktop, instead of headless;
+# chromium-l10n carries its translations (pt-PT and the other --lang values).
 FROM node:24-bookworm-slim
 
 # Bump on purpose: the guard's tool filtering depends on this server's tool names.
@@ -9,7 +11,7 @@ ARG PLAYWRIGHT_MCP_VERSION=0.0.83
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      chromium tini ca-certificates \
+      chromium chromium-l10n xvfb xauth tini ca-certificates \
       fonts-liberation fonts-noto-color-emoji fonts-noto-cjk fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
 

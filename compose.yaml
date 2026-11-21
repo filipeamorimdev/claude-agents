@@ -41,6 +41,7 @@
 #   BROWSER_ALLOWED_ORIGINS (https://www.olx.pt)     websites it may open pages on, separated by ";"
 #                             (their pages load images and scripts from anywhere, never your LAN)
 #   BROWSER_LOCALE (pt-PT)    the browsers' language; BROWSER_TIMEZONE (TZ, else Europe/Lisbon) their timezone
+#   BROWSER_SCREEN (1366x768) each browser's virtual screen (it runs headed on it); BROWSER_HEADLESS=1 for headless
 #
 # Agent and MCP server config lives in DATA_DIR/config (created with defaults on first start).
 # For https (phones need it for push notifications) put cert.pem and key.pem in DATA_DIR/config/tls.
@@ -261,6 +262,7 @@ services:
       - ${DATA_DIR}/vault:/vault
       - browser-logins:/run/browser-secrets
       - lan-logins:/run/lan-logins   # only device logins, per agent, for the LAN gateway's ssh
+      - ${DATA_DIR}/config/control.pub:/run/control.pub:ro   # takes signed calls from the app only
     <<: *hardening
     read_only: true
     networks: [agents]
@@ -296,9 +298,11 @@ services:
     environment:
       HOME: /tmp
       BROWSER_ALLOWED_ORIGINS: ${BROWSER_ALLOWED_ORIGINS:-https://www.olx.pt}
-      # Its language and timezone, as a person here would have (the guard also drops "HeadlessChrome" from its user agent)
+      # Its language and timezone, as a person here would have, and a full (headed) browser on a virtual screen
       BROWSER_LOCALE: ${BROWSER_LOCALE:-pt-PT}
       BROWSER_TIMEZONE: ${BROWSER_TIMEZONE:-${TZ:-Europe/Lisbon}}
+      BROWSER_SCREEN: ${BROWSER_SCREEN:-1366x768}
+      BROWSER_HEADLESS: ${BROWSER_HEADLESS:-}
       BROWSER_MAX_AGENTS: ${BROWSER_MAX_AGENTS:-3}       # browsers running at once (one per agent)
       BROWSER_IDLE_MINUTES: ${BROWSER_IDLE_MINUTES:-30}  # an agent's browser stops after this long unused
       LAN_PROXY_URL: http://${LAN_GATEWAY_BROWSER_IP:-172.30.2.250}:8934  # devices you let an agent's browser open
@@ -330,7 +334,7 @@ services:
       - sh
     # Options for every agent's browser; the guard adds the port, profile, logins and page rules.
     command:
-      - --headless
+      - --headless   # dropped by the guard when the image has a virtual screen (Xvfb): then it runs headed
       - --browser=chromium
       - --executable-path=/usr/lib/chromium/chromium   # Debian's Chromium, not Playwright's Chrome for Testing
       - --no-sandbox
@@ -338,6 +342,7 @@ services:
       - --shared-browser-context   # an agent's sessions share its browser: a profile can't be opened twice
     volumes:
       - browser-logins:/run/browser-secrets:ro
+      - ${DATA_DIR}/config/control.pub:/run/control.pub:ro   # the app's signatures and the agents' browser tokens
       - ${DATA_DIR}/browsers/guard:/guard:ro
       - ${DATA_DIR}/browsers/profiles:/profiles
       - ${DATA_DIR}/browsers/shots:/shots

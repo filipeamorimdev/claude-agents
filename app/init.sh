@@ -26,8 +26,9 @@ for f in agents mcp-servers; do
 done
 chown root:"$G" "$T/config"; chmod 755 "$T/config"
 chmod 644 "$T/config"/*.mjs
-# The app's control key (control.mjs): it signs every call to the command sandbox and the LAN gateway. The private half
-# stays in the app's home (hidden from agents), the public half goes in config/ for the sandbox and the gateway.
+# The app's control key (control.mjs): it signs every call to the command sandbox, the LAN gateway, the vault and the
+# browser's live view, and makes each agent's browser token. The private half stays in the app's home (hidden from
+# agents), the public half goes in config/ for the others.
 node /app/control.mjs keygen "$T/agents/home/control.key" "$T/config/control.pub"
 chown "$U:$G" "$T/agents/home/control.key"; chown root:"$G" "$T/config/control.pub"
 
@@ -40,6 +41,7 @@ fi
 # The browser's guard and page rules (app/browser): app code, so replaced on every start, and read-only for the browser.
 mkdir -p "$T/browsers/guard"
 cp /app/browser/* "$T/browsers/guard/"
+cp /app/control.mjs "$T/browsers/guard/"   # the guard checks the app's signatures and agent tokens with it
 chown -R root:"$G" "$T/browsers/guard"; chmod 755 "$T/browsers/guard"; chmod 644 "$T/browsers/guard"/*
 
 echo "data folder ready: agents → $U:$G"

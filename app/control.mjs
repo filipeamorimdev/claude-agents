@@ -1,4 +1,5 @@
-// Signed calls from the app to its helper containers (the command sandbox, shell.mjs, and the LAN gateway, lan.mjs).
+// Signed calls from the app to its helper containers (the command sandbox, shell.mjs, the LAN gateway, lan.mjs,
+// the vault, vault.mjs, and the live view of the browser's guard, browser/mcp-guard.mjs).
 //
 // Checking the caller's address isn't enough: an agent's own commands can run inside the app's container (Codex's
 // sandboxed shell, or Bash) and would look like the app. So every call is signed with a key only the app holds:
@@ -6,6 +7,9 @@
 //     hidden from agents: engine.mjs and codex.mjs deny it), the public key in DATA_DIR/config/control.pub
 //   - the sandbox and the gateway mount only the public key: a command that reads it can verify, not sign
 //   - a signature covers the method, path, time and body, and is accepted once, within a minute
+//   - the browser's guard also gets an agent token on every MCP call (X-Agent-Token): the app's signature of that
+//     agent's name. The agent's MCP client sends it, so an agent may learn its own token, but never another agent's:
+//     a call that names another agent (X-Agent) is refused. It can't stand in for a control signature (another message)
 //
 //   node control.mjs keygen <private key file> <public key file>   (init.sh; keeps an existing pair)
 
@@ -15,6 +19,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const CONTROL_HEADER = "X-Control";
+export const AGENT_TOKEN_HEADER = "X-Agent-Token";
 const MAX_SKEW_MS = 60_000;
 
 const digest = (method, p, at, nonce, body) =>
@@ -49,6 +54,31 @@ export function verifier(file = process.env.CONTROL_PUB || "/run/control.pub") {
     for (const [n, t] of seen) if (Date.now() - t > MAX_SKEW_MS * 2) seen.delete(n);
     seen.set(m[2], at);
     return true;
+  };
+}
+
+// ---------- agent tokens (the browser's guard) ----------
+
+const tokenMessage = (agent) => Buffer.from(`browser-agent\n${agent}`);
+
+/** The app's side: agent name -> its token (an Ed25519 signature is deterministic, so it's the same every run). */
+export function agentTokens(file = process.env.CONTROL_KEY || path.join(process.env.HOME || "/data/home", "control.key")) {
+  let key = null;
+  const cache = new Map();
+  return (agent) => {
+    try { key ??= crypto.createPrivateKey(readFileSync(file)); } catch { throw new Error(`The app's control key (${file}) is missing: redeploy the stack so its init service creates it.`); }
+    if (!cache.has(agent)) cache.set(agent, crypto.sign(null, tokenMessage(agent), key).toString("base64url"));
+    return cache.get(agent);
+  };
+}
+
+/** The guard's side: (agent, token) => true when the app made this token for this agent. */
+export function agentTokenVerifier(file = process.env.CONTROL_PUB || "/run/control.pub") {
+  let key = null;
+  return (agent, token) => {
+    try { key ??= crypto.createPublicKey(readFileSync(file)); } catch { return false; }
+    if (!/^[A-Za-z0-9_-]{40,200}$/.test(String(token ?? ""))) return false;
+    try { return crypto.verify(null, tokenMessage(String(agent)), key, Buffer.from(token, "base64url")); } catch { return false; }
   };
 }
 

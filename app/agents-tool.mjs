@@ -468,7 +468,10 @@ export function makeSelfHandlers(ctx) {
         ] : ["You can't reach anything on the human's network yet. If a task needs a device there, call request_network_access with its IP, port and why: the human approves it in the chat."],
         commands_you_may_run_without_asking: rules.map((r) => ({ [r.kind === "exact" ? "exactly" : "starting_with"]: r.pattern, lan: r.lan })),
         read_only_commands_without_asking: store.get(caller)?.readOnlyCommands
-          ? "yes: commands that only read in your own folder (ls, cat, head, tail, grep, rg, find, jq, wc, du, stat, diff, sort...), alone or piped, run without asking. Anything that writes, deletes, uses the network or your devices, git, sed, awk or a script still asks."
+          ? "yes: commands that only read run without asking, alone or piped: in your own folder (ls, cat, head, tail, grep, rg, find, jq, wc, du, stat, diff, sort...); " +
+            "on a device granted to you, one plain read-only command over ssh (lan-ssh <device> cat|ls|df|free|uptime|ps|systemctl status|journalctl|docker ps|docker logs|ip addr|ss...) " +
+            "and GETs with `lan curl -s http://<device-ip>:<port>/...` (no -o, -d, -X, -w). Still asks: --sudo, anything that writes, deletes, restarts or changes something, " +
+            "anything naming private data (keys, passwords, tokens, .env, shadow, .ssh...), the internet, git, sed, awk or a script."
           : "no",
       }, null, 2));
     },

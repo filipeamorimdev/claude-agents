@@ -1684,7 +1684,7 @@ async function openDrawer(name) {
     h("input", { type: "checkbox", checked: !!a.readOnlyCommands, onchange: (e) => change(() => api("PUT", `/api/agents/${name}/read-only-commands`, { on: e.target.checked }),
       e.target.checked ? `${labelOf(name)} runs read-only commands without asking` : `${labelOf(name)} asks again before read-only commands`) }),
     h("span", {}, h("span", { style: "font-weight:600" }, "Read-only commands"), " ",
-      h("span", { class: "desc" }, "Looking around in its own folder (ls, cat, grep, find, jq, wc, du, diff…) runs without asking. Anything that changes something, uses the network or your devices, or looks outside its folder still asks.")));
+      h("span", { class: "desc" }, "Looking around runs without asking: in its own folder (ls, cat, grep, find, jq, wc, du, diff…), and on the devices you granted it (lan-ssh with cat, ls, df, systemctl status, journalctl, docker ps…, and GETs with lan curl). Anything that changes, restarts or deletes something, uses sudo, touches private data (keys, passwords, tokens, .env…) or the internet still asks.")));
   const commands = h("div", {}, h("h4", {}, "Commands without asking"), readOnly,
     a.commandRules.length ? h("div", {}, ...a.commandRules.map(ruleRow)) : h("p", { style: "margin:0;color:var(--muted)" }, a.readOnlyCommands ? "No rules: it asks before every command that isn't read-only." : "No rules: it asks you before every command."),
     h("div", { class: "inline-add", style: "flex-wrap:wrap" }, ruleKind, rulePattern, ruleLan, h("button", { class: "btn", onclick: addRule }, "Add")),
