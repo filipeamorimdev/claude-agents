@@ -25,7 +25,7 @@
 // Some commands never run without you, whatever the rules say: anything that mentions the log, the database,
 // the agents CLI or purging. Auto-approved commands are logged like any other, marked with the rule that let them run.
 
-import { realpathSync, readdirSync, existsSync } from "node:fs";
+import { realpathSync, readdirSync, lstatSync, readlinkSync } from "node:fs";
 import path from "node:path";
 import { privateIPv4 } from "./address.mjs";
 
@@ -148,23 +148,55 @@ function staysHome(p, glob, home) {
   if (glob && (p.includes("/") || p.startsWith("."))) return false;
   return true;
 }
+const MAX_LINKS = 40; // as many symlinks as Linux follows in one path
+
 /**
  * Whether a path, as the sandbox sees it, really stays in the folder once symlinks are followed. local: the same folder
- * as this container sees it. A path that doesn't exist (yet) is judged by the deepest part of it that does.
+ * as this container sees it (the sandbox's home, e.g. /workspaces/<agent>, is local here).
+ *
+ * Symlinks are followed by hand, the way the sandbox would, never by this container: a link's target means what it
+ * means there. `x -> /workspaces/bob/secret` doesn't exist here (this container has no /workspaces), so asking this
+ * container (existsSync, realpath) would see a broken link and judge it by its folder, while the sandbox opens bob's file.
+ * So every part of the path that is a symlink is read (lstat, readlink), its target resolved against the sandbox's
+ * paths, and the path must end up in the folder: a link to anywhere else, or a broken one pointing out, asks. A part that
+ * doesn't exist (a file not made yet) is fine: nothing past it can be a link.
  */
-function realStaysHome(p, home, local, localReal) {
-  let full = p.startsWith("/") ? path.join(local, p.slice(home.length)) : path.join(local, p);
-  while (!existsSync(full) && full !== local && full.startsWith(`${local}/`)) full = path.dirname(full);
-  let real;
-  try { real = realpathSync(full); } catch { return false; }
-  return real === localReal || real.startsWith(`${localReal}/`);
+function realStaysHome(p, home, local) {
+  const inside = (abs) => abs === home || abs.startsWith(`${home}/`);
+  const above = (abs) => abs === "/" || `${home}/`.startsWith(`${abs}/`); // "/", "/workspaces": on the way to the folder
+  const parts = (s) => s.split("/").filter(Boolean);
+  let queue = parts(p.startsWith("/") ? p : `${home}/${p}`);
+  let cur = []; // resolved so far, in the sandbox's paths
+  let links = 0;
+  while (queue.length) {
+    const c = queue.shift();
+    if (c === ".") continue;
+    if (c === "..") { cur.pop(); continue; }
+    const next = `/${[...cur, c].join("/")}`;
+    if (!inside(next)) {
+      if (above(next)) { cur.push(c); continue; } // the sandbox's own folders, not the agent's: no link of its there
+      return false;
+    }
+    let st = null;
+    try { st = lstatSync(path.join(local, next.slice(home.length))); } catch { st = null; } // not there (yet)
+    if (st?.isSymbolicLink()) {
+      if (++links > MAX_LINKS) return false;
+      let target;
+      try { target = readlinkSync(path.join(local, next.slice(home.length))); } catch { return false; }
+      if (target.startsWith("/")) cur = []; // an absolute target starts again at the sandbox's root
+      queue = [...parts(target), ...queue];
+      continue;
+    }
+    cur.push(c);
+  }
+  return inside(`/${cur.join("/")}`);
 }
 
 /** Whether every entry of the folder (what a glob without "/" can match) stays in it once symlinks are followed. */
-function entriesStayHome(local, localReal) {
+function entriesStayHome(home, local) {
   let names;
   try { names = readdirSync(local); } catch { return false; }
-  return names.every((n) => realStaysHome(n, "", local, localReal));
+  return names.every((n) => realStaysHome(n, home, local));
 }
 
 /** Whether one part of a pipeline only reads inside the agent's own folder (see isReadOnly). Sets ctx.globbed. */
@@ -175,7 +207,7 @@ function localPartOk(part, home, local, localReal, ctx) {
   if (!check || ws[0].glob || !check(rest)) return false;
   return ws.slice(1).every((w) => {
     ctx.globbed ||= w.glob;
-    return pathsOf(w.text).every((p) => staysHome(p, w.glob, home) && (!local || w.glob || realStaysHome(p, home, local, localReal)));
+    return pathsOf(w.text).every((p) => staysHome(p, w.glob, home) && (!local || w.glob || realStaysHome(p, home, local)));
   });
 }
 
@@ -285,7 +317,7 @@ export function readOnlyApproval(cmd, agent, workspaces = "/workspaces", local =
     else if (curlPartOk(part)) { if (lan === "none") lan = "read"; }
     else if (!localPartOk(part, home, local, localReal, ctx)) return null;
   }
-  if (local && ctx.globbed && !entriesStayHome(local, localReal)) return null;
+  if (local && ctx.globbed && !entriesStayHome(home, local)) return null;
   return { lan };
 }
 

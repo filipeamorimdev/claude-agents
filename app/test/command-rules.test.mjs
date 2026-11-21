@@ -51,15 +51,39 @@ test("symlinks out of its folder ask, once the folder is on disk", () => {
   mkdirSync(path.join(me, "sub"), { recursive: true }); mkdirSync(other);
   writeFileSync(path.join(other, "secret"), "x"); writeFileSync(path.join(me, "a.txt"), "a");
   symlinkSync(other, path.join(me, "out"));
-  symlinkSync(path.join(me, "a.txt"), path.join(me, "sub", "in"));
+  symlinkSync("../a.txt", path.join(me, "sub", "in"));
+  symlinkSync("/workspaces/me/a.txt", path.join(me, "abs-in"));
+  symlinkSync("sub", path.join(me, "dir-in"));
   assert.equal(ro("cat a.txt", me), true);
   assert.equal(ro("cat sub/in", me), true, "a link that stays inside is fine");
+  assert.equal(ro("cat abs-in", me), true, "an absolute link into its own folder, as the sandbox names it");
+  assert.equal(ro("cat dir-in/in", me), true, "links through links that stay inside");
+  assert.equal(ro("cat sub/../a.txt", me), false, ".. in a word still asks");
   assert.equal(ro("cat new-file", me), true, "a file that doesn't exist yet is judged by its folder");
   assert.equal(ro("cat out/secret", me), false);
   assert.equal(ro("ls out", me), false);
   assert.equal(ro("cat /workspaces/me/out/secret", me), false);
   assert.equal(ro("cat *", me), false, "a glob that can match the link");
   assert.equal(ro("cat out/secret"), true, "without the folder only the text is checked");
+});
+
+test("links whose target exists only in the sandbox ask too (broken links here)", () => {
+  const me = path.join(realpathSync(mkdtempSync(path.join(tmpdir(), "rules-"))), "me");
+  mkdirSync(path.join(me, "sub"), { recursive: true });
+  // Broken in this container (there is no /workspaces here), another agent's file in the sandbox.
+  symlinkSync("/workspaces/bob/secret", path.join(me, "x"));
+  symlinkSync("/workspaces/bob", path.join(me, "bobdir"));
+  symlinkSync("/tmp/shared", path.join(me, "t"));
+  symlinkSync("../../bob/secret", path.join(me, "sub", "up"));
+  symlinkSync("x", path.join(me, "chain"));
+  symlinkSync("loop", path.join(me, "loop"));
+  symlinkSync("/workspaces/me-not/secret", path.join(me, "prefix"));
+  for (const c of ["cat x", "cat bobdir/secret", "ls bobdir", "cat t", "cat sub/up", "cat chain", "cat loop", "cat prefix",
+    "cat /workspaces/me/x", "grep -n foo x", "wc -l *"]) {
+    assert.equal(ro(c, me), false, c);
+  }
+  assert.equal(ro("cat sub", me), true);
+  assert.equal(ro("cat sub/new/deeper.txt", me), true, "a path that doesn't exist yet");
 });
 
 test("exact and prefix rules", () => {
