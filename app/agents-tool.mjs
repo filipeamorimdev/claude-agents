@@ -24,6 +24,8 @@
 // the command, its exit code and output all go to the log. Its home network: nothing, unless the human granted the
 // agent targets (each one IP and port) in the LAN gateway (lan.mjs); network_access tells it what it has.
 // "agents" also has delegate/check_tasks/wait_for_tasks: background tasks for other agents (tasks.mjs).
+// An agent without "agents" still gets ask_agent in "self" while the human is talking to it directly (chat or
+// `agents ask`): the human told it to ask, so it may. Scheduled runs and runs started by other agents don't get it.
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -213,6 +215,9 @@ export function makeSelfHandlers(ctx) {
   const fromHuman = ctx.depth === 0 && (ctx.trigger === "chat" || ctx.trigger === "ask:human");
 
   return {
+    // Only registered while the human talks to this agent directly (canAskAgents): same checks as in "agents".
+    ask_agent: (args) => makeHandlers(ctx).ask_agent(args),
+
     get_profile: async () => {
       const a = store.get(caller);
       return text(JSON.stringify({
@@ -604,9 +609,20 @@ export function makeSelfHandlers(ctx) {
   };
 }
 
+/** ask_agent in "self": the human is chatting with this agent directly, and it doesn't already have "agents". */
+const canAskAgents = (ctx) => ctx.depth === 0 && (ctx.trigger === "chat" || ctx.trigger === "ask:human") &&
+  !ctx.store.get(ctx.caller)?.tools?.includes("mcp__agents");
+
 function selfTools(ctx) {
   const h = makeSelfHandlers(ctx);
   return [
+    ...(canAskAgents(ctx) ? [
+      ["ask_agent",
+        "Ask another agent (e.g. one the human @mentions) to do something or tell you something, and wait for its answer. " +
+        "Only when the human asked you to in this chat. The other agent sees only your message, so make it complete.",
+        { name: z.string().describe('The agent\'s id, e.g. "homelab-monitor" (without the @)'), message: z.string().max(4000) },
+        h.ask_agent],
+    ] : []),
     ["get_profile", "Your own profile: id, display name, description and full instructions (prompt).", {}, h.get_profile],
     ["update_profile",
       "Change your own name, description, instructions or schedule when the human asks you to. Only the fields you pass change. " +
