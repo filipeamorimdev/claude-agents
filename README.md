@@ -423,6 +423,10 @@ on each host that runs only approved commands, still to come.
   to install system packages. All agents' workspace folders are mounted in it, so an approved command can read
   another agent's files. It can't reach other machines itself: only through the LAN gateway, to devices you granted.
 - Changing `UI_PASSWORD` signs every browser out, and **Sign out** ends that session on the server too.
+- A device can sign in without the password with a QR code. On the sign-in screen, **Sign in with a QR code**
+  shows a code: scan it with a signed-in phone and tap **Approve**. On a signed-in device, **Sign in another
+  device** shows a code the new device scans. Each code works once and only for 3 minutes. Anyone who scans an
+  invite code is signed in as you, so show one only to your own device.
 
 ## License
 

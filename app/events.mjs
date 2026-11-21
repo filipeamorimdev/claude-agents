@@ -43,6 +43,8 @@ export function describeEvent(e) {
       return `push device "${d.device}" turned notifications off; turn them on again on that device`;
     case "device-remove":
       return `${e.actor} removed push device "${d.device}"`;
+    case "qr-signin":
+      return `${e.actor} signed in a new device with a QR code (${d.how === "invite" ? "it scanned a signed-in screen" : "a signed-in device approved it"})${d.device ? `: ${one(d.device, 120)}` : ""}`;
     case "login-request":
       return `${e.actor} asked for a login for ${d.site} (${tools(d.names)})${d.reason ? `: ${one(d.reason, 200)}` : ""}`;
     case "login-save":

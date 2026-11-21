@@ -1,5 +1,5 @@
 // Web UI: a WhatsApp-style chat with your agents, served from the agents container.
-// Plain node:http, no framework. Password login (UI_PASSWORD), live updates over SSE.
+// Plain node:http, no framework. Password login (UI_PASSWORD) or a QR code from a signed-in device, live updates over SSE.
 // HTTPS when a certificate is given (tls), which phones need for push notifications.
 // Also an installable web app (manifest + service worker) so it can get native push notifications.
 // Webhooks (POST /hooks/<secret>) start an agent's run without the login: the secret in the URL is the key.
@@ -21,6 +21,7 @@ import { iconPng } from "./icon.mjs";
 import { siteRule, siteAllowed, waitUntilUp, usesLogins, AGENT_NAME_RE, deviceOf } from "./logins.mjs";
 import { PRESETS, TARGET_ID_RE, LAN_MODES, validateTarget } from "./lan.mjs";
 import { signer } from "./control.mjs";
+import QRCode from "qrcode";
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "ui");
 const UI_FILE = path.join(UI_DIR, "index.html");
@@ -45,6 +46,9 @@ const BROWSER_RESTART_MS = 3000;    // the browser notices new logins within a s
 const HOOK_MAX = 64 * 1024;         // webhook payload
 const HOOK_PER_HOUR = 30;           // runs one webhook may start per hour
 const HOOK_RE = /^\/hooks\/([A-Za-z0-9_-]{20,64})$/;
+const QR_TTL_MS = 3 * 60e3;         // how long a sign-in QR code works
+const QR_MAX = 50;                  // QR codes waiting at once (the unauthenticated side can make them)
+const QR_CODE_RE = "([a-f0-9]{32})";
 const LIVE_INPUTS = new Set(["click", "drag", "scroll", "type", "key", "back", "reload", "tab", "close-tab"]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -79,6 +83,38 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
     return a.length === b.length && crypto.timingSafeEqual(a, b) ? { sid: m[2], exp: Number(m[1]) } : null;
   };
   const authed = (req) => !!session(req);
+
+  // ---------- QR sign-in: a signed-in device lets a new one in, no password typed ----------
+  // Two ways, so a phone's camera can always do the scanning:
+  //   request: the new device shows a QR (#approve=<code>); a signed-in device opens it and approves. The new device
+  //            waits with a secret only it holds (the code is on screen, so it can't be what gets the session).
+  //   invite:  a signed-in device shows a QR (#signin=<code>); the new device opens it and is signed in. One use.
+  // Codes live in memory for QR_TTL_MS: a restart drops them, which only means showing a new one.
+  const qrs = new Map(); // code -> { kind, secret?, exp, state: "pending"|"approved"|"used", device, ip }
+  // Kept a while past expiry, so the device showing an invite still learns it was used.
+  const qrSweep = () => { for (const [c, q] of qrs) if (q.exp + QR_TTL_MS < Date.now()) qrs.delete(c); };
+  const qrLive = (code) => { qrSweep(); const q = qrs.get(code); return q && q.exp >= Date.now() ? q : null; };
+  const qrDevice = (req) => String(req.headers["user-agent"] ?? "").slice(0, 300);
+  const qrSvg = (req, hash) => QRCode.toString(`${tls ? "https" : "http"}://${req.headers.host}/#${hash}`, { type: "svg", errorCorrectionLevel: "M", margin: 2 });
+  const qrNew = (fields) => {
+    qrSweep();
+    if ([...qrs.values()].filter((q) => q.state === "pending" && q.exp >= Date.now()).length >= QR_MAX) throw Object.assign(new Error("Too many sign-in codes waiting. Try again in a few minutes."), { code: 429 });
+    const code = crypto.randomBytes(16).toString("hex");
+    qrs.set(code, { state: "pending", exp: Date.now() + QR_TTL_MS, ...fields });
+    return code;
+  };
+  /** Rate limit for the open QR routes, shared with the password's: 10 tries per IP per 10 minutes. */
+  const qrTry = (req) => {
+    const ip = req.socket.remoteAddress;
+    const recent = (attempts.get(ip) ?? []).filter((t) => Date.now() - t < 10 * 60e3);
+    if (recent.length >= 10) throw Object.assign(new Error("Too many attempts. Wait 10 minutes."), { code: 429 });
+    attempts.set(ip, [...recent, Date.now()]);
+  };
+  const qrSignedIn = (req, q, how) => {
+    q.state = "used";
+    store.event("human (ui)", "qr-signin", null, { how, device: q.device });
+    log("ui", `device signed in with a QR code (${how}) from ${req.socket.remoteAddress}`);
+  };
 
   // ---------- live updates (SSE) ----------
   const clients = new Set();
@@ -210,6 +246,50 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
     if (!ok) { log("ui", `failed login from ${ip}`); return send(res, 401, { error: "Wrong password" }); }
     attempts.delete(ip);
     send(res, 200, { ok: true }, { "Set-Cookie": sessionCookie() });
+  });
+
+  // request: the new device (not signed in) asks for a code to show. Counts as a try: each one is a code to approve.
+  route("POST", "/api/qr/request", async (req, res) => {
+    qrTry(req);
+    const secret = crypto.randomBytes(32).toString("hex");
+    const code = qrNew({ kind: "request", secret: crypto.createHash("sha256").update(secret).digest(), device: qrDevice(req), ip: req.socket.remoteAddress });
+    send(res, 200, { code, secret, svg: await qrSvg(req, `approve=${code}`), expires: qrs.get(code).exp });
+  });
+  // ...then waits. Approved: this answer signs it in (once). Polled every couple of seconds, so not counted as tries.
+  route("POST", `/api/qr/request/${QR_CODE_RE}/wait`, async (req, res, [code]) => {
+    const { secret = "" } = await json(req);
+    const q = qrLive(code);
+    const ok = q?.kind === "request" && crypto.timingSafeEqual(crypto.createHash("sha256").update(String(secret)).digest(), q.secret);
+    if (!ok || q.state === "used") return send(res, 410, { error: "This code expired. Show a new one." });
+    if (q.state !== "approved") return send(res, 200, { state: q.state });
+    qrSignedIn(req, q, "request");
+    send(res, 200, { state: "signed-in" }, { "Set-Cookie": sessionCookie() });
+  });
+  // invite: open a signed-in device's code. Counted as a try, like a password.
+  route("POST", `/api/qr/invite/${QR_CODE_RE}/use`, (req, res, [code]) => {
+    qrTry(req);
+    const q = qrLive(code);
+    if (q?.kind !== "invite" || q.state !== "pending") return send(res, 410, { error: "This QR code expired or was already used. Show a new one on a signed-in device." });
+    q.device = qrDevice(req);
+    attempts.delete(req.socket.remoteAddress);
+    qrSignedIn(req, q, "invite");
+    send(res, 200, { ok: true }, { "Set-Cookie": sessionCookie() });
+  });
+  // Signed in from here on: make an invite, look at a code, approve a request.
+  route("POST", "/api/qr/invite", async (req, res) => {
+    const code = qrNew({ kind: "invite", device: "" });
+    send(res, 200, { code, svg: await qrSvg(req, `signin=${code}`), expires: qrs.get(code).exp });
+  });
+  route("GET", `/api/qr/${QR_CODE_RE}`, (req, res, [code]) => {
+    const q = qrLive(code) ?? (qrs.get(code)?.state === "used" ? qrs.get(code) : null);
+    if (!q) return send(res, 410, { error: "This QR code expired. Show a new one on the device you're signing in." });
+    send(res, 200, { kind: q.kind, state: q.state, device: q.device, ip: q.kind === "request" ? q.ip : null, expires: q.exp });
+  });
+  route("POST", `/api/qr/${QR_CODE_RE}/approve`, (req, res, [code]) => {
+    const q = qrLive(code);
+    if (q?.kind !== "request" || q.state !== "pending") return send(res, 410, { error: "This QR code expired or was already used. Show a new one on the device you're signing in." });
+    q.state = "approved";
+    send(res, 200, { ok: true });
   });
 
   route("POST", "/api/logout", (req, res) => {
@@ -1032,7 +1112,8 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
       const hook = url.pathname.match(HOOK_RE);
       if (hook) return await webhook(req, res, hook[1]);
       if (!url.pathname.startsWith("/api/")) return send(res, 404, { error: "not found" });
-      const open = url.pathname === "/api/login" || url.pathname === "/api/me";
+      const open = url.pathname === "/api/login" || url.pathname === "/api/me" || url.pathname === "/api/qr/request"
+        || /^\/api\/qr\/(request\/[a-f0-9]{32}\/wait|invite\/[a-f0-9]{32}\/use)$/.test(url.pathname);
       if (!open && !authed(req)) return send(res, 401, { error: "login required" });
       for (const r of routes) {
         const m = r.method === req.method && url.pathname.match(r.re);

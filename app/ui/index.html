@@ -54,6 +54,11 @@ button { cursor: pointer; }
 .login p { margin: 0 0 20px; color: var(--muted); }
 .login input { width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
 .login .err { color: var(--danger); min-height: 1.4em; margin: 8px 0 0; font-size: 14px; }
+.login .alt { width: 100%; margin-top: 10px; padding: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+/* QR sign-in: the code on white whatever the theme, so every camera reads it */
+.qr { width: min(240px, 100%); aspect-ratio: 1; margin: 4px auto 12px; background: #fff; border-radius: 14px; padding: 6px; }
+.qr svg { display: block; width: 100%; height: 100%; }
+.qr-note { text-align: center; color: var(--muted); font-size: 14px; margin: 0 0 12px; }
 
 /* ---------- shell ---------- */
 .app { display: flex; height: 100dvh; }
@@ -425,6 +430,16 @@ details.prompt pre { white-space: pre-wrap; background: var(--surface-2); border
     <input id="pw" type="password" autocomplete="current-password" placeholder="Password" required>
     <p class="err" id="login-err" role="alert"></p>
     <button class="btn primary" style="width:100%;padding:11px" type="submit">Sign in</button>
+    <button class="btn alt" id="qr-login" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3"/></svg> Sign in with a QR code</button>
+  </form>
+  <form id="qr-form" hidden>
+    <h1>Sign in with a QR code</h1>
+    <p>Scan this with a phone or computer that's already signed in, then tap <b>Approve</b> there.</p>
+    <div class="qr" id="qr-img" role="img" aria-label="QR code to approve this device"></div>
+    <p class="qr-note" id="qr-note"></p>
+    <p class="err" id="qr-err" role="alert"></p>
+    <button class="btn" style="width:100%;padding:10px" id="qr-new" type="button">Show a new code</button>
+    <button class="btn alt" id="qr-back" type="button">Use the password instead</button>
   </form>
 </section>
 
@@ -445,6 +460,10 @@ details.prompt pre { white-space: pre-wrap; background: var(--surface-2); border
     <div class="search"><label class="sr" for="q">Search agents, or type / for a command</label><input id="q" type="search" placeholder="Search, or / for commands" autocomplete="off" aria-controls="list" aria-haspopup="dialog"></div>
     <nav class="list" id="list" aria-label="Chats"></nav>
     <div class="side-foot">
+      <button class="signout" id="qr-invite" title="Show a QR code that signs in a phone or computer without the password">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3"/></svg>
+        Sign in another device
+      </button>
       <button class="signout" id="logout">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3M14 17l5-5-5-5M19 12H9"/></svg>
         Sign out
@@ -2306,7 +2325,90 @@ function deviceArgs(text) {
   return { title: "Press Enter", items };
 }
 
-// Links: #agent=<name> (a tapped notification), #devices, #pair=<code>, #logins, #activity, #run=<id> (one interaction)
+// ---------------- QR sign-in: no password on the new device ----------------
+// Signed in here: "Sign in another device" shows a one-use code (#signin=<code>) for the new device's camera.
+// Signing in there: "Sign in with a QR code" shows #approve=<code>; a signed-in device opens it and approves.
+const uaName = (ua = "") => {
+  const os = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android" : /Mac/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "";
+  const app = /Edg\//.test(ua) ? "Edge" : /Firefox|FxiOS/.test(ua) ? "Firefox" : /Chrome|CriOS/.test(ua) ? "Chrome" : /Safari/.test(ua) ? "Safari" : "A browser";
+  return `${app}${os ? ` on ${os}` : ""}`;
+};
+const qrBox = (svg) => { const el = h("div", { class: "qr", role: "img", "aria-label": "QR code" }); el.innerHTML = svg; return el; }; // our server's SVG
+const minsLeft = (exp) => { const s = Math.max(0, Math.round((exp - Date.now()) / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+
+async function openInviteDrawer() {
+  let q;
+  try { q = await api("POST", "/api/qr/invite"); } catch (e) { return toast(e.message); }
+  const note = h("p", { class: "qr-note" });
+  const close = showDrawer({ label: "Sign in another device", title: h("div", { class: "drawer-title" }, "Sign in another device"), body: [
+    h("p", { style: "margin:0;color:var(--muted)" }, "Scan this with the phone's camera, or open it on the other device: it's signed in without the password. The code works once."),
+    qrBox(q.svg), note,
+    h("p", { class: "field-hint", style: "margin:0" }, "Anyone who scans it is signed in as you, so show it only to your own device."),
+  ] });
+  const drawer = $('#drawer-root .drawer[aria-label="Sign in another device"]');
+  const tick = async (n) => {
+    if (!drawer.isConnected) return;
+    if (Date.now() > q.expires) { note.textContent = "Expired."; note.append(" ", h("button", { class: "btn sm", onclick: openInviteDrawer }, "Show a new code")); return; }
+    note.textContent = `Works for ${minsLeft(q.expires)}`;
+    if (n % 2 === 0) {
+      const st = await api("GET", `/api/qr/${q.code}`).catch(() => null);
+      if (st?.state === "used") { close(); return toast(`${uaName(st.device)} is signed in`); }
+    }
+    setTimeout(() => tick(n + 1), 1000);
+  };
+  tick(0);
+}
+$("#qr-invite").addEventListener("click", openInviteDrawer);
+
+async function openApproveDrawer(code) {
+  let q;
+  try { q = await api("GET", `/api/qr/${code}`); } catch (e) { return toast(e.message); }
+  if (q.kind !== "request" || q.state !== "pending") return toast("This QR code was already used. Show a new one on the device you're signing in.");
+  const err = h("p", { class: "err", style: "color:var(--danger);margin:0", role: "alert" });
+  const close = showDrawer({ label: "Approve a device", title: h("div", { class: "drawer-title" }, "Sign in this device?"), body: [
+    h("div", { class: "card", style: "border-left-color:var(--cobalt)" },
+      h("h3", {}, uaName(q.device)),
+      h("div", { class: "by" }, `From ${q.ip ?? "an unknown address"} · the code works for ${minsLeft(q.expires)}`)),
+    h("p", { style: "margin:0;color:var(--muted)" }, "Approve only if you're looking at this code on your own device right now. It gets the same access as you."),
+    err,
+  ], foot: [
+    h("button", { class: "btn", onclick: () => close() }, "Not me"),
+    h("button", { class: "btn primary", onclick: async () => {
+      try { await api("POST", `/api/qr/${code}/approve`); close(); toast(`${uaName(q.device)} is signing in`); }
+      catch (e) { err.textContent = e.message; }
+    } }, "Approve"),
+  ] });
+}
+
+// On the sign-in screen: show a code, wait for a signed-in device to approve it.
+let qrWait = null;
+async function showQrLogin() {
+  clearTimeout(qrWait);
+  $("#login-form").hidden = true; $("#qr-form").hidden = false; $("#qr-err").textContent = ""; $("#qr-note").textContent = "";
+  let q;
+  try { q = await api("POST", "/api/qr/request"); } catch (e) { $("#qr-img").replaceChildren(); $("#qr-err").textContent = e.message; return; }
+  $("#qr-img").innerHTML = q.svg; // our server's SVG
+  const poll = async (n) => {
+    if ($("#qr-form").hidden) return;
+    if (Date.now() > q.expires) { $("#qr-note").textContent = "This code expired."; return; }
+    $("#qr-note").textContent = `Waiting for approval · ${minsLeft(q.expires)}`;
+    if (n % 2 === 0) {
+      try {
+        const r = await api("POST", `/api/qr/request/${q.code}/wait`, { secret: q.secret });
+        if (r.state === "signed-in") { hideQrLogin(); return boot(); }
+      } catch (e) { $("#qr-note").textContent = ""; $("#qr-err").textContent = e.message; return; }
+    }
+    qrWait = setTimeout(() => poll(n + 1), 1000);
+  };
+  poll(0);
+}
+function hideQrLogin() { clearTimeout(qrWait); $("#qr-form").hidden = true; $("#login-form").hidden = false; $("#qr-img").replaceChildren(); }
+$("#qr-login").addEventListener("click", showQrLogin);
+$("#qr-new").addEventListener("click", showQrLogin);
+$("#qr-back").addEventListener("click", () => { hideQrLogin(); $("#pw").focus(); });
+
+// Links: #agent=<name> (a tapped notification), #devices, #pair=<code>, #logins, #activity, #run=<id> (one interaction),
+// #approve=<code> (another device's QR sign-in)
 function openFromHash() {
   const [k, v = ""] = location.hash.slice(1).split("=");
   if (!k) return;
@@ -2317,6 +2419,7 @@ function openFromHash() {
   if (k === "devices") openDevicesDrawer();
   if (k === "logins") openLoginsDrawer();
   if (k === "pair") openDevicesDrawer({ pair: decodeURIComponent(v) });
+  if (k === "approve" && /^[a-f0-9]{32}$/.test(v)) openApproveDrawer(v);
 }
 window.addEventListener("hashchange", () => { if (!$("#app").hidden) openFromHash(); });
 
@@ -2575,7 +2678,12 @@ $("#q").addEventListener("keydown", (e) => { if (e.key === "Escape" && e.target.
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { S.newHook = null; $("#drawer-root").replaceChildren(); } });
 
 // ---------------- boot ----------------
-function showLogin() { $("#app").hidden = true; $("#login").hidden = false; es?.close(); clearTimeout(retryTimer); setTimeout(() => $("#pw").focus(), 0); }
+function showLogin() {
+  $("#app").hidden = true; $("#login").hidden = false; es?.close(); clearTimeout(retryTimer);
+  // Scanned another device's code before signing in here: say what happens after.
+  if (/^#approve=/.test(location.hash)) $("#login-form p").textContent = "Sign in here first, then approve the other device.";
+  setTimeout(() => $("#pw").focus(), 0);
+}
 async function boot() {
   $("#login").hidden = true; $("#app").hidden = false;
   await Promise.all([loadState(), loadLogins()]); connect();
@@ -2588,7 +2696,14 @@ $("#login-form").addEventListener("submit", async (e) => {
   catch (err) { $("#login-err").textContent = err.message; }
 });
 $("#logout").addEventListener("click", async () => { await api("POST", "/api/logout").catch(() => {}); showLogin(); });
-api("GET", "/api/me").then(boot).catch(() => showLogin());
+// #signin=<code>: a signed-in device's QR code, scanned here. Used once, then it's an ordinary session.
+const signin = location.hash.match(/^#signin=([a-f0-9]{32})$/)?.[1];
+if (signin) history.replaceState(null, "", location.pathname + location.search);
+api("GET", "/api/me").then(boot).catch(async () => {
+  if (!signin) return showLogin();
+  try { await api("POST", `/api/qr/invite/${signin}/use`); boot(); }
+  catch (e) { showLogin(); $("#login-err").textContent = e.message; }
+});
 </script>
 </body>
 </html>
