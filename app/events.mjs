@@ -119,6 +119,8 @@ export function describeEvent(e) {
       return `${e.actor} let ${e.agent} reach ${d.targets?.length ? d.targets.map((t) => `${t.id} (${t.mode === "full" ? "full" : "read-only"}${t.browser ? ", browser too" : ""})`).join(", ") : "nothing on your network"}`;
     case "browser-control":
       return `${e.actor} took control of ${e.agent}'s browser`;
+    case "browser-hands-on":
+      return `${e.actor} took ${e.agent}'s browser by hand (plain Chromium, no automation) to do what it asked`;
     default:
       return `${e.actor} ${e.action} ${e.agent ?? ""}`.trim();
   }

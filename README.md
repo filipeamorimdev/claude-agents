@@ -320,11 +320,19 @@ stores them encrypted (AES-256-GCM) in `DATA_DIR/vault`, which no other containe
 - **Each agent has its own browser**, with its own cookies and sign-ins (`DATA_DIR/browsers/profiles/<agent>`)
   and only the logins it's allowed. One agent can't use a site where another is signed in. A browser
   starts when its agent first needs it and stops after `BROWSER_IDLE_MINUTES` (30) unused; at most
-  `BROWSER_MAX_AGENTS` (3) run at once. Screenshots go to `DATA_DIR/browsers/shots/<agent>`.
+  `BROWSER_MAX_AGENTS` (3) run at once. Screenshots go to `DATA_DIR/browsers/shots/<agent>` (a file name an agent
+  gives keeps only its name, in that folder: its own paths don't exist in the browser's container).
 - **Watch it, or take over.** The screen icon in its chat (or `/browser`) shows its page live. Tick
   **Take control** to click, scroll and type in it yourself. When a site needs something only you can do
   (a captcha, a code sent to you), the agent calls `request_takeover`: a card asks you to open its browser,
   do it, and tap **Done, hand it back**, and it carries on from there.
+  While you have control from that card, its page runs in plain Chromium that nothing automates (the agent waits),
+  because some sign-in pages (OLX's, Vinted's) refuse any browser Playwright drives and show a person a slider check at
+  most: drag on the picture to slide it. What you sign in to stays in its profile; it gets its own browser back when you
+  answer the card. A browser restart (new logins, a takeover) keeps the agent's session going.
+- **It looks like an ordinary browser here**: Chromium's normal user agent (CloudFront sites like OLX and Wallapop
+  answer "HeadlessChrome" with a 403), in `BROWSER_LOCALE` (pt-PT) and `BROWSER_TIMEZONE` (the stack's `TZ`).
+  Nothing else is hidden: it's still a Playwright browser, and sites that check for that can still tell.
 - The browser opens pages only on its sites, listed in the agent's details under *What it can reach* → *In its
   browser*: `BROWSER_ALLOWED_ORIGINS` plus the ones you add there or allow when saving a login it asked for
   (`https://www.vinted.pt`, `vinted.pt`, or `*.vinted.pt`), and on the devices on your network you granted it. A page on

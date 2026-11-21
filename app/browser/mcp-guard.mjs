@@ -25,13 +25,28 @@
 // which hands them to the gateway in the agent's name. The gateway checks the device, the mode and logs each request.
 // Every other address goes out directly, as before; navigation.cjs still refuses every other private address.
 //
+// How it presents itself: headless Chromium says "HeadlessChrome" in its user agent, and CloudFront's bot rules (OLX,
+// Wallapop) answer that with a 403 before any page loads. Each browser gets the same Chromium's ordinary user agent,
+// and the human's language and timezone (BROWSER_LOCALE, BROWSER_TIMEZONE) instead of en-US and UTC. Nothing else is
+// disguised: it's still a browser driven by Playwright, and a site that checks for that still sees it.
+//
+// Hands-on: some sign-in pages (OLX's, Vinted's) refuse any browser Playwright drives, and show a person a slider
+// check at most. When the human takes control during a takeover, the guard closes the agent's Playwright browser and
+// opens the same profile in plain Chromium that nothing automates: only the live view's pictures and the human's
+// input reach it, and it can't open your network or this server. The agent's calls wait until it's handed back;
+// whatever the human signed in to stays in the profile, and Playwright opens it again on the agent's next call.
+//
+// Files the agent asks to save (a screenshot or snapshot with a filename) always land in its own folder,
+// /shots/<agent> (DATA_DIR/browsers/shots/<agent>): the agent's paths, like /data/workspaces/..., don't exist here.
+//
 // Started as: node mcp-guard.mjs <Playwright MCP options for every browser>
 
 import http from "node:http";
 import net from "node:net";
 import crypto from "node:crypto";
-import { spawn } from "node:child_process";
-import { readFileSync, existsSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { spawn, execFileSync } from "node:child_process";
+import { readFileSync, existsSync, writeFileSync, rmSync } from "node:fs";
 
 const BLOCKED = new Set(["browser_run_code_unsafe", "browser_evaluate", "browser_network_request", "browser_network_requests"]);
 const PORT = Number(process.env.MCP_GUARD_PORT || 8931);
@@ -45,6 +60,21 @@ const FIRST_PORT = 8940;
 const AGENT_RE = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/; // AGENT_NAME_RE in app/logins.mjs: also a safe folder name
 const SERVER_ARGS = process.argv.slice(2);
 const log = (msg) => console.log(`${new Date().toISOString()} [guard] ${msg}`);
+
+// ---------- how the browser presents itself ----------
+
+/** Chromium's own user agent without "Headless" (Chrome reports its major version only: 156.0.0.0). */
+const USER_AGENT = (() => {
+  const exe = SERVER_ARGS.find((a) => a.startsWith("--executable-path="))?.slice("--executable-path=".length) || "chromium";
+  let major = "";
+  try { major = execFileSync(exe, ["--version"], { encoding: "utf8", timeout: 15_000 }).match(/(\d+)\.\d+\.\d+/)?.[1] ?? ""; } catch { /* below */ }
+  if (!major) { log(`couldn't read ${exe}'s version: its browsers keep their headless user agent`); return null; }
+  return `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+})();
+const LOCALE = process.env.BROWSER_LOCALE || "pt-PT";
+const TIMEZONE = process.env.BROWSER_TIMEZONE || process.env.TZ || "Europe/Lisbon";
+const contextOptions = { locale: LOCALE, timezoneId: TIMEZONE, ...(USER_AGENT ? { userAgent: USER_AGENT } : {}) };
+const CHROMIUM = SERVER_ARGS.find((a) => a.startsWith("--executable-path="))?.slice("--executable-path=".length) || "chromium";
 
 const read = (f) => { try { return readFileSync(f, "utf8"); } catch { return ""; } };
 const loginsFile = (agent) => `${SECRETS}/agents/${agent}.env`;
@@ -120,7 +150,8 @@ const notGranted = (args, agent) => {
 
 // ---------- one browser per agent ----------
 
-/** agent → { port, cdp, stamp, used, open, stopped, child, ready: Promise<port>, exited: Promise, live } */
+/** agent → { port, cdp, stamp, used, open, stopped, child, ready: Promise<port>, exited: Promise, live, hands }
+ *  (hands: true for plain Chromium the human drives: child is Chromium itself, and there is no MCP port) */
 const browsers = new Map();
 
 const portFree = (port) => new Promise((resolve) => {
@@ -156,20 +187,23 @@ function start(agent, after) {
     // The DevTools port for the live view, on 127.0.0.1 only (Playwright keeps its own pipe to the browser).
     const config = `/tmp/guard-${agent}.json`;
     const devices = devicesOf(agent);
-    const args = [`--remote-debugging-port=${b.cdp}`, "--remote-debugging-address=127.0.0.1"];
+    const args = [`--remote-debugging-port=${b.cdp}`, "--remote-debugging-address=127.0.0.1", `--lang=${LOCALE}`];
     if (devices.length) {
       b.lanPort = await freePort();
       b.lan = await lanForwarder(agent, b.lanPort);
       if (b.stopped) throw new Error("stopped before it started");
       args.push(`--proxy-pac-url=${pacFor(devices, b.lanPort)}`);
     }
-    writeFileSync(config, JSON.stringify({ browser: { launchOptions: { args } } }));
+    writeFileSync(config, JSON.stringify({ browser: { launchOptions: { args }, contextOptions } }));
+    // Chromium's lock names the container it ran in: after the container is recreated (an update, a crash) it would
+    // refuse the profile as "in use". Only this guard opens it, and the agent's last browser has exited by now.
+    for (const f of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) rmSync(`${PROFILES}/${agent}/${f}`, { force: true });
     b.child = spawn(process.execPath, [CLI, ...SERVER_ARGS, `--port=${b.port}`, "--host=127.0.0.1", `--config=${config}`,
       `--user-data-dir=${PROFILES}/${agent}`, `--output-dir=${SHOTS}/${agent}`, "--init-page=/guard/navigation.cjs",
       ...(existsSync(file) ? [`--secrets=${file}`] : [])], { env: { ...process.env, BROWSER_SITES: sites(), BROWSER_LAN: JSON.stringify(devices) }, stdio: ["ignore", "inherit", "inherit"] });
     b.exited = new Promise((resolve) => b.child.once("exit", resolve));
     b.exited.then(() => { if (browsers.get(agent) === b) browsers.delete(agent); });
-    log(`started ${agent}'s browser with ${logins} login(s)${devices.length ? ` and ${devices.length} device(s) on your network` : ""}`);
+    log(`started ${agent}'s browser (${LOCALE}, ${TIMEZONE}) with ${logins} login(s)${devices.length ? ` and ${devices.length} device(s) on your network` : ""}`);
     return answers(b);
   })();
   b.ready.catch((e) => { if (!b.stopped) { log(`${agent}'s browser: ${e.message}`); stop(agent, b); } });
@@ -192,7 +226,7 @@ function stop(agent, b, why) {
 /** The agent's browser, started (or restarted with new logins) when needed. */
 function browserFor(agent) {
   let b = browsers.get(agent);
-  if (b && b.stamp !== stamp(agent)) b = start(agent, stop(agent, b, "its logins, the sites or its devices changed"));
+  if (b && !b.hands && b.stamp !== stamp(agent)) b = start(agent, stop(agent, b, "its logins, the sites or its devices changed"));
   if (b) return b;
   if (browsers.size >= MAX_BROWSERS) {
     const idle = [...browsers].filter(([, x]) => x.open === 0).sort(([, x], [, y]) => x.used - y.used)[0];
@@ -206,9 +240,79 @@ setInterval(() => {
   for (const [agent, b] of browsers) {
     if (b.open === 0 && Date.now() - b.used > IDLE_MS) stop(agent, b, "not used for a while");
     // Restarted now rather than on the next call, so it's ready when the agent carries on.
-    else if (b.stamp !== stamp(agent)) start(agent, stop(agent, b, "its logins, the sites or its devices changed"));
+    else if (!b.hands && b.stamp !== stamp(agent)) start(agent, stop(agent, b, "its logins, the sites or its devices changed"));
   }
 }, 1000).unref();
+
+// ---------- hands-on: plain Chromium on the agent's profile, for the human alone ----------
+
+const HANDS_IDLE_MS = 3 * 60_000; // the human stopped touching it this long ago: the agent may have it back
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Nothing on your network or in this container: private addresses go to a proxy that isn't there (no fallback).
+const HANDS_PAC = `data:application/x-ns-proxy-autoconfig;base64,${Buffer.from(`function FindProxyForURL(url, host) {
+  var no = "PROXY 127.0.0.1:9";
+  if (isPlainHostName(host) || /\\.(localhost|local|internal|lan|home\\.arpa)$/.test(host)) return no;
+  var ip = dnsResolve(host);
+  if (!ip || isInNet(ip, "10.0.0.0", "255.0.0.0") || isInNet(ip, "172.16.0.0", "255.240.0.0") || isInNet(ip, "192.168.0.0", "255.255.0.0")
+    || isInNet(ip, "127.0.0.0", "255.0.0.0") || isInNet(ip, "169.254.0.0", "255.255.0.0") || isInNet(ip, "100.64.0.0", "255.192.0.0")
+    || isInNet(ip, "0.0.0.0", "255.0.0.0")) return no;
+  return "DIRECT";
+}`).toString("base64")}`;
+
+/** Hands the agent's profile to plain Chromium, on the page the agent left. Its Playwright server stops meanwhile. */
+function handsOn(agent) {
+  const old = browsers.get(agent);
+  if (old?.hands) return old.ready;
+  const h = { hands: true, port: 0, stamp: stamp(agent), used: Date.now(), open: 0 };
+  h.ready = (async () => {
+    let url = "about:blank";
+    if (old) {
+      const p = await livePage(agent).catch(() => null);
+      if (p && /^https?:/.test(p.page.url)) url = p.page.url;
+      await stop(agent, old, "the human is taking it over by hand");
+    }
+    h.cdp = await freePort();
+    if (h.stopped) throw new Error("stopped before it started");
+    for (const f of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) rmSync(`${PROFILES}/${agent}/${f}`, { force: true });
+    h.child = spawn(CHROMIUM, ["--headless", "--no-sandbox", `--user-data-dir=${PROFILES}/${agent}`,
+      `--remote-debugging-port=${h.cdp}`, "--remote-debugging-address=127.0.0.1",
+      ...(USER_AGENT ? [`--user-agent=${USER_AGENT}`] : []), `--lang=${LOCALE}`, `--accept-lang=${LOCALE},${LOCALE.split("-")[0]}`,
+      `--proxy-pac-url=${HANDS_PAC}`, "--proxy-bypass-list=<-loopback>", "--no-first-run", "--no-default-browser-check",
+      "--window-size=1280,720", url], { env: { ...process.env, TZ: TIMEZONE }, stdio: "ignore" });
+    h.exited = new Promise((resolve) => h.child.once("exit", resolve));
+    h.exited.then(() => { if (browsers.get(agent) === h) browsers.delete(agent); });
+    for (const until = Date.now() + 20_000; Date.now() < until; await sleep(300)) {
+      if (h.child.exitCode !== null) throw new Error("Chromium exited while starting");
+      if (await fetch(`http://127.0.0.1:${h.cdp}/json/version`, { signal: AbortSignal.timeout(1000) }).then((r) => r.ok, () => false)) {
+        h.used = Date.now();
+        log(`${agent}'s browser: the human has it, in plain Chromium (no automation)`);
+        return h.cdp;
+      }
+    }
+    throw new Error("Chromium took too long to start");
+  })();
+  h.ready.catch((e) => { if (!h.stopped) { log(`${agent}'s browser: hands-on failed: ${e.message}`); stop(agent, h); } });
+  browsers.set(agent, h);
+  return h.ready;
+}
+
+/** Closes plain Chromium cleanly (so the sign-ins are written to the profile); the agent's next call reopens Playwright. */
+async function handsOff(agent) {
+  const h = browsers.get(agent);
+  if (!h?.hands) return false;
+  await h.ready.catch(() => {});
+  h.live?.close();
+  if (h.child && h.child.exitCode === null && h.cdp) {
+    try {
+      const { webSocketDebuggerUrl } = await fetch(`http://127.0.0.1:${h.cdp}/json/version`, { signal: AbortSignal.timeout(2000) }).then((r) => r.json());
+      await (await devtools(webSocketDebuggerUrl)).send("Browser.close").catch(() => {});
+      await Promise.race([h.exited, sleep(8000)]);
+    } catch { /* stop() below */ }
+  }
+  await stop(agent, h, h.child?.exitCode === null ? "handed back to the agent" : null);
+  log(`${agent}'s browser: handed back to the agent`);
+  return true;
+}
 
 const shutdown = async () => {
   await Promise.all([...browsers].map(([a, b]) => stop(a, b)));
@@ -250,10 +354,11 @@ function devtools(url) {
 /** The page the agent is on (the most recently used tab), with a DevTools connection kept per browser. */
 async function livePage(agent) {
   const b = browsers.get(agent);
-  if (!b || b.stopped || !b.cdp) return null;
+  if (!b || b.stopped) return null;
   try { await b.ready; } catch { return null; }
+  const cdp = b.cdp;
   let pages;
-  try { pages = await fetch(`http://127.0.0.1:${b.cdp}/json/list`, { signal: AbortSignal.timeout(2000) }).then((r) => r.json()); }
+  try { pages = await fetch(`http://127.0.0.1:${cdp}/json/list`, { signal: AbortSignal.timeout(2000) }).then((r) => r.json()); }
   catch { return null; } // the browser opens on the agent's first browser tool call
   pages = pages.filter((p) => p.type === "page" && !p.url.startsWith("devtools://"));
   // The tab you picked in the live view while it's open, else the one the browser used last (listed first).
@@ -263,7 +368,7 @@ async function livePage(agent) {
     b.live?.close();
     b.live = Object.assign(await devtools(page.webSocketDebuggerUrl), { id: page.id });
   }
-  return { b, page, pages, s: b.live };
+  return { b, page, pages, s: b.live, cdp };
 }
 
 const KEYS = { Enter: [13, "\r"], Tab: [9], Backspace: [8], Escape: [27], Delete: [46], ArrowUp: [38], ArrowDown: [40], ArrowLeft: [37], ArrowRight: [39], Home: [36], End: [35] };
@@ -272,14 +377,14 @@ const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 async function live(res, agent, what, body) {
   const p = await livePage(agent).catch(() => null);
   if (!p) return reply(res, 404, { error: "Its browser isn't open right now: it's open only while the agent is using it, during a run." });
-  const { b, page, pages, s } = p;
+  const { b, page, pages, s, cdp } = p;
   if (what === "shot") {
     // Chromium can refuse the first frame just after a navigation ("Unable to capture screenshot"): one more try.
     const capture = () => s.send("Page.captureScreenshot", { format: "jpeg", quality: 70 });
     const [{ cssVisualViewport: v }, { data }] = await Promise.all([s.send("Page.getLayoutMetrics"),
       capture().catch(() => new Promise((r) => setTimeout(r, 400)).then(capture))]);
     res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "no-store", "X-Page-Url": encodeURI(page.url).slice(0, 2000),
-      "X-Page-Title": encodeURIComponent(page.title).slice(0, 500), "X-Viewport": `${Math.round(v.clientWidth)}x${Math.round(v.clientHeight)}`,
+      "X-Page-Title": encodeURIComponent(page.title).slice(0, 500), "X-Hands-On": b.hands ? "1" : "0", "X-Viewport": `${Math.round(v.clientWidth)}x${Math.round(v.clientHeight)}`,
       // Its tabs, for the tab strip (kept short: it's a header)
       "X-Tabs": encodeURIComponent(JSON.stringify(pages.slice(0, 15).map((t) => ({ id: t.id, title: t.title.slice(0, 60), url: t.url.slice(0, 200), active: t.id === page.id })))) });
     return res.end(Buffer.from(data, "base64"));
@@ -292,6 +397,17 @@ async function live(res, agent, what, body) {
     case "click":
       for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await s.send("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
       break;
+    case "drag": { // press, move along the human's path (with their timing, at most 6 s in all), release: slider checks
+      const pts = (Array.isArray(input.path) ? input.path : []).slice(0, 300).map((q) => ({ x: num(q.x), y: num(q.y), t: Math.max(0, num(q.t)) }));
+      if (pts.length < 2) return reply(res, 400, { error: "a drag needs a path" });
+      const total = pts.reduce((a, q) => a + q.t, 0), scale = total > 6000 ? 6000 / total : 1;
+      const at = (q) => ({ x: q.x, y: q.y, button: "left", buttons: 1 });
+      await s.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pts[0].x, y: pts[0].y });
+      await s.send("Input.dispatchMouseEvent", { type: "mousePressed", ...at(pts[0]), clickCount: 1 });
+      for (const q of pts.slice(1)) { if (q.t) await new Promise((r) => setTimeout(r, q.t * scale)); await s.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...at(q) }); }
+      await s.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...at(pts.at(-1)), buttons: 0, clickCount: 1 });
+      break;
+    }
     case "scroll":
       await s.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: 0, deltaY: Math.max(-3000, Math.min(3000, num(input.dy))) });
       break;
@@ -317,7 +433,7 @@ async function live(res, agent, what, body) {
       const t = pages.find((x) => x.id === input.id);
       if (!t) return reply(res, 404, { error: "That tab is closed" });
       b.liveTab = t.id;
-      await fetch(`http://127.0.0.1:${b.cdp}/json/activate/${t.id}`, { signal: AbortSignal.timeout(2000) }).catch(() => {});
+      await fetch(`http://127.0.0.1:${cdp}/json/activate/${t.id}`, { signal: AbortSignal.timeout(2000) }).catch(() => {});
       break;
     }
     case "close-tab": {
@@ -325,7 +441,7 @@ async function live(res, agent, what, body) {
       if (!t) return reply(res, 404, { error: "That tab is closed" });
       if (pages.length < 2) return reply(res, 400, { error: "It's the browser's last tab" });
       if (b.liveTab === t.id) b.liveTab = null;
-      await fetch(`http://127.0.0.1:${b.cdp}/json/close/${t.id}`, { signal: AbortSignal.timeout(2000) });
+      await fetch(`http://127.0.0.1:${cdp}/json/close/${t.id}`, { signal: AbortSignal.timeout(2000) });
       break;
     }
     default:
@@ -336,7 +452,29 @@ async function live(res, agent, what, body) {
 
 // ---------- the proxy ----------
 
+/** A file the agent names: only its name is kept, inside the agent's own folder here. */
+function ownFile(agent, name) {
+  const base = path.posix.basename(String(name).replaceAll("\\", "/")).replace(/[^\w.-]/g, "_").replace(/^\.+/, "");
+  return base ? `${SHOTS}/${agent}/${base}` : undefined;
+}
+
 const reply = (res, status, body) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(body)); };
+// The agent's MCP sessions, by the id it holds: { agent, init (its initialize message), server (the browser entry
+// that knows it), upstream (that server's id for it) }. When its browser restarts (new logins or sites, a takeover by
+// hand) the new server doesn't know the id; the guard opens a session there with the same initialize and keeps
+// answering under the old id, so the agent carries on instead of getting "Session not found".
+const sessions = new Map();
+async function reopen(port, init) {
+  const url = `http://127.0.0.1:${port}/mcp`, accept = { "Content-Type": "application/json", Accept: "application/json, text/event-stream" };
+  const r = await fetch(url, { method: "POST", headers: accept, body: JSON.stringify(init), signal: AbortSignal.timeout(15_000) });
+  const id = r.headers.get("mcp-session-id");
+  await r.text();
+  if (!r.ok || !id) throw new Error(`initialize answered ${r.status}`);
+  await (await fetch(url, { method: "POST", headers: { ...accept, "mcp-session-id": id },
+    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }), signal: AbortSignal.timeout(15_000) })).text();
+  return id;
+}
+
 const refusal = (id, text) => ({ jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text }] } });
 
 // tools/list results without the blocked tools (a JSON body, or one SSE data line).
@@ -353,14 +491,23 @@ http.createServer((req, res) => {
   req.on("data", (c) => chunks.push(c));
   req.on("end", async () => {
     const body = Buffer.concat(chunks);
-    const lv = req.url.match(/^\/live\/([a-z0-9][a-z0-9-]{1,30}[a-z0-9])\/(shot|input)$/);
+    const lv = req.url.match(/^\/live\/([a-z0-9][a-z0-9-]{1,30}[a-z0-9])\/(shot|input|hands)$/);
+    // Only the app's server calls these, never a web page (a page in the human's plain Chromium could try loopback).
+    if (lv && (req.headers.origin || req.headers["sec-fetch-dest"])) return reply(res, 403, { error: "not from a page" });
+    if (lv && lv[2] === "hands" && req.method === "POST") {
+      let on;
+      try { on = JSON.parse(body.toString()).on === true; } catch { return reply(res, 400, { error: "expected JSON" }); }
+      return (on ? handsOn(lv[1]).then(() => true) : handsOff(lv[1]))
+        .then((changed) => reply(res, 200, { ok: true, handsOn: on, changed }))
+        .catch((e) => reply(res, 502, { error: `Couldn't open it for you: ${e.message}` }));
+    }
     if (lv && (lv[2] === "shot" ? req.method === "GET" : req.method === "POST")) {
       return live(res, lv[1], lv[2], body.toString()).catch((e) => { if (!res.headersSent) reply(res, 502, { error: e.message }); else res.end(); });
     }
     const agent = String(req.headers["x-agent"] ?? "");
     if (!AGENT_RE.test(agent)) return reply(res, 400, { error: "No agent named: only the agents app connects to the browser" });
-    let messages = [];
-    if (req.method === "POST") { try { messages = [JSON.parse(body)].flat(); } catch { /* not JSON: the server answers */ } }
+    let messages = [], parsed;
+    if (req.method === "POST") { try { parsed = JSON.parse(body); messages = [parsed].flat(); } catch { /* not JSON: the server answers */ } }
     for (const m of messages.filter((m) => m?.method === "tools/call")) {
       const denied = BLOCKED.has(m.params?.name) ? `${m.params.name} is turned off here: it could expose saved logins.`
         : notGranted(m.params?.arguments, agent).map((n) => `${n} is a saved login that ${agent} may not use. ` +
@@ -370,6 +517,24 @@ http.createServer((req, res) => {
         return reply(res, 200, refusal(m.id, denied));
       }
     }
+    const held = browsers.get(agent);
+    if (held?.hands && messages.some((m) => m?.method === "tools/call")) {
+      if (Date.now() - held.used > HANDS_IDLE_MS) await handsOff(agent); // the human left it: the agent may carry on
+      else {
+        const m = messages.find((x) => x?.method === "tools/call");
+        return reply(res, 200, refusal(m.id, "The human has your browser right now (taking over by hand). Wait for request_takeover to answer, then take a new snapshot."));
+      }
+    }
+    if (browsers.get(agent)?.hands) return reply(res, 503, { error: "The human has the browser right now" });
+    let out = body;
+    const saving = messages.filter((m) => m?.method === "tools/call" && typeof m.params?.arguments?.filename === "string");
+    if (saving.length) {
+      for (const m of saving) {
+        const file = ownFile(agent, m.params.arguments.filename);
+        if (file) m.params.arguments.filename = file; else delete m.params.arguments.filename;
+      }
+      out = Buffer.from(JSON.stringify(parsed));
+    }
     const b = browserFor(agent);
     if (!b) return reply(res, 503, { error: `Every browser is busy (at most ${MAX_BROWSERS} at once): try again shortly` });
     b.open++; b.used = Date.now();
@@ -377,14 +542,37 @@ http.createServer((req, res) => {
     let port;
     try { port = await b.ready; } catch { return reply(res, 503, { error: "the browser is restarting" }); }
     const listing = messages.some((m) => m?.method === "tools/list");
-    const up = http.request({ host: "127.0.0.1", port, method: req.method, path: req.url, headers: { ...req.headers, host: `127.0.0.1:${port}` } }, (ur) => {
-      if (!listing) { res.writeHead(ur.statusCode, ur.headers); return ur.pipe(res); }
+    const headers = { ...req.headers, host: `127.0.0.1:${port}` };
+    const sid = req.headers["mcp-session-id"];
+    const sess = typeof sid === "string" ? sessions.get(sid) : null;
+    if (sess && sess.agent === agent) {
+      if (sess.server !== b) {
+        try { sess.upstream = await reopen(port, sess.init); sess.server = b; log(`${agent}'s session carried over to its restarted browser`); }
+        catch (e) { return reply(res, 503, { error: `the browser is restarting (${e.message})` }); }
+      }
+      headers["mcp-session-id"] = sess.upstream;
+      if (req.method === "DELETE") sessions.delete(sid);
+    }
+    const init = messages.find((m) => m?.method === "initialize" && m.id !== undefined);
+    /** The server's headers, under the id the agent holds; a new session is remembered. */
+    const back = (h) => {
+      const out = { ...h };
+      if (sess) out["mcp-session-id"] = sid;
+      else if (init && h["mcp-session-id"]) {
+        sessions.set(h["mcp-session-id"], { agent, init, server: b, upstream: h["mcp-session-id"] });
+        if (sessions.size > 200) sessions.delete(sessions.keys().next().value);
+      }
+      return out;
+    };
+    if (out !== body) { headers["content-length"] = String(out.length); delete headers["transfer-encoding"]; }
+    const up = http.request({ host: "127.0.0.1", port, method: req.method, path: req.url, headers }, (ur) => {
+      if (!listing) { res.writeHead(ur.statusCode, back(ur.headers)); return ur.pipe(res); }
       const out = [];
       ur.on("data", (c) => out.push(c));
       ur.on("end", () => {
         const text = Buffer.concat(out).toString();
         const sse = /text\/event-stream/.test(ur.headers["content-type"] ?? "");
-        const headers = { ...ur.headers };
+        const headers = back(ur.headers);
         delete headers["content-length"]; delete headers["transfer-encoding"];
         res.writeHead(ur.statusCode, headers);
         res.end(sse ? text.replace(/^data: ?(.*)$/gm, (_, d) => `data: ${withoutBlocked(d)}`) : withoutBlocked(text));
@@ -392,6 +580,6 @@ http.createServer((req, res) => {
     });
     up.on("error", () => { if (!res.headersSent) reply(res, 503, { error: "the browser is restarting" }); else res.end(); });
     res.on("close", () => { if (!res.writableEnded) up.destroy(); }); // the agent went away mid-answer
-    up.end(body);
+    up.end(out);
   });
 }).listen(PORT, "0.0.0.0", () => log(`on port ${PORT}: a browser per agent, at most ${MAX_BROWSERS} at once`));

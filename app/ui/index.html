@@ -348,7 +348,7 @@ body.resizing .dock, body.resizing .main { pointer-events: none; }
 .live { position: relative; background: #0b0f17; border-radius: 12px; overflow: hidden; min-height: 120px; display: grid; place-items: center; }
 .live img { display: block; width: 100%; height: auto; user-select: none; }
 .live.control { outline: 3px solid var(--amber); outline-offset: -3px; }
-.live.control img { cursor: crosshair; }
+.live.control img { cursor: crosshair; touch-action: none; }
 .live-tabs { display: flex; gap: 4px; overflow-x: auto; margin-bottom: -6px; scrollbar-width: thin; }
 .live-tab { display: flex; align-items: center; min-width: 0; max-width: 220px; flex: 0 1 auto; border-radius: 8px 8px 0 0; background: var(--surface-2, rgba(127,127,127,.12)); color: var(--muted); }
 .live-tab.active { background: #0b0f17; color: #e6ebf3; }
@@ -1890,7 +1890,8 @@ function closeDock() { $("#dock").hidden = true; $("#split").hidden = true; $("#
 }
 // ---------------- live view of an agent's own browser ----------------
 // A picture of its page, refreshed while this is open. With "Take control" on, your clicks, scrolling and typing
-// go to the page: for a captcha or a code only you have. Opened from a takeover request, it also hands the browser back.
+// go to the page: for a captcha or a code only you have. Opened from a takeover request, it also hands the browser back,
+// and taking control there runs its page in plain Chromium that nothing automates (some sign-in pages refuse Playwright).
 const ICON_SCREEN = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>';
 function browserButton(name) {
   const b = h("button", { class: "icon-btn", title: "Watch its browser", "aria-label": `Watch ${labelOf(name)}'s browser`, onclick: () => openBrowserView(name) });
@@ -1909,7 +1910,29 @@ function openBrowserView(name, { action = null } = {}) {
   const send = (input) => (queue = queue.then(async () => {
     try { await api("POST", `/api/browser/${name}/input`, input); setTimeout(refresh, 200); } catch (e) { toast(e.message); }
   }));
-  img.addEventListener("click", (e) => { if (!control) return; frame.focus({ preventScroll: true }); send({ type: "click", ...at(e) }); });
+  // A press that moves becomes a drag (slider checks), with your path and timing; one that doesn't is a click.
+  let press = null;
+  img.addEventListener("pointerdown", (e) => {
+    if (!control || e.button !== 0) return;
+    e.preventDefault(); frame.focus({ preventScroll: true }); img.setPointerCapture(e.pointerId);
+    press = { id: e.pointerId, x0: e.clientX, y0: e.clientY, last: performance.now(), path: [{ ...at(e), t: 0 }], moved: false };
+  });
+  img.addEventListener("pointermove", (e) => {
+    if (!press || e.pointerId !== press.id) return;
+    const now = performance.now();
+    if (Math.hypot(e.clientX - press.x0, e.clientY - press.y0) > 5) press.moved = true;
+    if (now - press.last < 16 || press.path.length >= 300) return;
+    press.path.push({ ...at(e), t: Math.round(now - press.last) }); press.last = now;
+  });
+  const release = (e) => {
+    if (!press || e.pointerId !== press.id) return;
+    const p = press; press = null;
+    if (e.type === "pointercancel") return;
+    if (!p.moved) return send({ type: "click", ...at(e) });
+    p.path.push({ ...at(e), t: Math.round(performance.now() - p.last) });
+    send({ type: "drag", path: p.path });
+  };
+  img.addEventListener("pointerup", release); img.addEventListener("pointercancel", release);
   // Typing straight onto the picture: letters are gathered for a moment and sent as text, special keys as keys.
   let pending = "", flushTimer = null;
   const flush = () => { clearTimeout(flushTimer); flushTimer = null; if (pending) { send({ type: "type", text: pending }); pending = ""; } };
@@ -1941,7 +1964,16 @@ function openBrowserView(name, { action = null } = {}) {
   // With a keyboard you type on the page itself; this box is for touch screens, whose keyboard needs a field to open.
   const keys = h("div", { class: "live-bar live-touch", hidden: !control }, typed, h("button", { class: "btn sm primary", onclick: typeIt }, "Send"),
     key("Enter"), key("Tab"), key("Backspace", "⌫"), key("Escape", "Esc"));
-  const toggle = h("input", { type: "checkbox", checked: control, onchange: (e) => { control = e.target.checked; frame.classList.toggle("control", control); keys.hidden = !control; if (control) frame.focus({ preventScroll: true }); else flush(); } });
+  // From a takeover: your control runs its page in plain Chromium (the agent waits), until you answer the request.
+  let handsOn = false;
+  const takeHands = async () => {
+    if (!action || handsOn) return;
+    handsOn = true;
+    status.textContent = "Opening its page for you, without the agent's automation…";
+    try { await api("POST", `/api/browser/${name}/hands`, { on: true }); refresh(); }
+    catch (e) { handsOn = false; toast(e.message); }
+  };
+  const toggle = h("input", { type: "checkbox", checked: control, onchange: (e) => { control = e.target.checked; frame.classList.toggle("control", control); keys.hidden = !control; if (control) { frame.focus({ preventScroll: true }); takeHands(); } else flush(); } });
   // Its tabs: click one to see it, × to close it (with Take control on). Redrawn only when they change.
   const tabs = h("div", { class: "live-tabs", role: "tablist", "aria-label": "Its tabs" });
   let tabsSeen = "";
@@ -1994,10 +2026,12 @@ function openBrowserView(name, { action = null } = {}) {
       h("button", { class: "btn sm", onclick: () => send({ type: "reload" }) }, "Reload"),
       h("label", { class: "live-control", style: "margin-left:auto" }, toggle, "Take control")),
     tabs, frame, status, keys,
-    h("p", { class: "field-hint", style: "margin:0" }, "Only you see this. With Take control on, click the picture to click the page, scroll over it to scroll, and type: your keys and pastes go to the page. " +
-      "The agent may be using the browser too: take control when it's waiting for you."),
+    h("p", { class: "field-hint", style: "margin:0" }, "Only you see this. With Take control on, click the picture to click the page, drag on it to drag (a slider check), scroll over it to scroll, and type: your keys and pastes go to the page. " +
+      (action ? "While it waits for you, its page runs without any automation, so sites treat it as you. It gets its browser back, signed in, when you answer below."
+        : "The agent may be using the browser too: take control when it's waiting for you.")),
   ], foot: action ? [note, h("button", { class: "btn danger", onclick: answer("deny") }, "Can't do it"), h("button", { class: "btn primary", onclick: answer("done") }, "Done, hand it back")] : null });
   refresh();
+  if (control) takeHands();
 }
 
 const ICON_AGENT = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21c0-3.9 3.6-7 8-7s8 3.1 8 7"/></svg>';

@@ -44,7 +44,7 @@ const BROWSER_RESTART_MS = 3000;    // the browser notices new logins within a s
 const HOOK_MAX = 64 * 1024;         // webhook payload
 const HOOK_PER_HOUR = 30;           // runs one webhook may start per hour
 const HOOK_RE = /^\/hooks\/([A-Za-z0-9_-]{20,64})$/;
-const LIVE_INPUTS = new Set(["click", "scroll", "type", "key", "back", "reload", "tab", "close-tab"]);
+const LIVE_INPUTS = new Set(["click", "drag", "scroll", "type", "key", "back", "reload", "tab", "close-tab"]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function startUi({ store, engine, dataDir, bus, port, password, log, tls = null }) {
@@ -596,6 +596,8 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
     if (action === "done" && r.kind !== "takeover") return send(res, 400, { error: "Only a browser takeover is handed back" });
     if (action === "allow" && r.kind === "takeover") return send(res, 400, { error: "Hand the browser back when you're done instead" });
     const { note = "" } = await json(req);
+    // A takeover answered: the agent gets its own browser back before it hears, so its next step finds it ready.
+    if (r.kind === "takeover") await hands(r.agent, false).catch(() => {});
     if (action === "always" && command) {
       try { store.addCommandRule(r.agent, { kind: "exact", pattern: command, lan: "full", note: "from \"Always allow\" on a request" }, "human (ui)"); }
       catch (e) { return send(res, 400, { error: e.message }); }
@@ -706,6 +708,27 @@ export function startUi({ store, engine, dataDir, bus, port, password, log, tls 
       r = await fetch(`${base}/live/${name}/input`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal: AbortSignal.timeout(8000) });
     } catch { return send(res, 503, { error: "The browser isn't reachable" }); }
     send(res, r.status, await r.json().catch(() => ({})));
+  });
+
+  // Hands-on, during a takeover only: the guard runs the agent's profile in plain Chromium that nothing automates
+  // (some sign-in pages refuse a Playwright browser outright), and gives it back when the takeover is answered.
+  const hands = async (name, on) => {
+    const base = guardOf(name);
+    if (!base) return { status: 404, body: { error: `${name} has no browser` } };
+    try {
+      const r = await fetch(`${base}/live/${name}/hands`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ on }), signal: AbortSignal.timeout(45_000) });
+      return { status: r.status, body: await r.json().catch(() => ({})) };
+    } catch { return { status: 503, body: { error: "The browser isn't reachable" } }; }
+  };
+  route("POST", "/api/browser/([a-z0-9-]+)/hands", async (req, res, [name]) => {
+    const { on } = await json(req);
+    if (on === true && !store.openActions().some((a) => a.agent === name && a.kind === "takeover")) {
+      return send(res, 409, { error: `${name} isn't waiting for you in its browser` });
+    }
+    if (on === true) store.event("human (ui)", "browser-hands-on", name);
+    const r = await hands(name, on === true);
+    send(res, r.status, r.body);
   });
 
   // Site logins: kept in the vault container (vault.mjs). What you type here goes straight there and never into

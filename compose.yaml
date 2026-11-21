@@ -40,6 +40,7 @@
 #                             e.g. "OLX_EMAIL=me@example.com;OLX_PASSWORD=..."
 #   BROWSER_ALLOWED_ORIGINS (https://www.olx.pt)     websites it may open pages on, separated by ";"
 #                             (their pages load images and scripts from anywhere, never your LAN)
+#   BROWSER_LOCALE (pt-PT)    the browsers' language; BROWSER_TIMEZONE (TZ, else Europe/Lisbon) their timezone
 #
 # Agent and MCP server config lives in DATA_DIR/config (created with defaults on first start).
 # For https (phones need it for push notifications) put cert.pem and key.pem in DATA_DIR/config/tls.
@@ -295,6 +296,9 @@ services:
     environment:
       HOME: /tmp
       BROWSER_ALLOWED_ORIGINS: ${BROWSER_ALLOWED_ORIGINS:-https://www.olx.pt}
+      # Its language and timezone, as a person here would have (the guard also drops "HeadlessChrome" from its user agent)
+      BROWSER_LOCALE: ${BROWSER_LOCALE:-pt-PT}
+      BROWSER_TIMEZONE: ${BROWSER_TIMEZONE:-${TZ:-Europe/Lisbon}}
       BROWSER_MAX_AGENTS: ${BROWSER_MAX_AGENTS:-3}       # browsers running at once (one per agent)
       BROWSER_IDLE_MINUTES: ${BROWSER_IDLE_MINUTES:-30}  # an agent's browser stops after this long unused
       LAN_PROXY_URL: http://${LAN_GATEWAY_BROWSER_IP:-172.30.2.250}:8934  # devices you let an agent's browser open
@@ -304,7 +308,8 @@ services:
     # and only the logins granted to that agent, and restarts it when its logins or the sites change.
     # It also drops the tools that could expose logins. Pages open only on the allowed sites
     # (app/browser/navigation.cjs); what they load can come from anywhere. Screenshots go to
-    # DATA_DIR/browsers/shots/<agent>. The loop below restarts the guard when the app updates it.
+    # DATA_DIR/browsers/shots/<agent> (a filename an agent gives keeps only its name, in that folder).
+    # When you take control during a takeover, the guard runs that agent's profile in plain Chromium, no automation. The loop below restarts the guard when the app updates it.
     entrypoint:
       - /usr/bin/tini
       - -s

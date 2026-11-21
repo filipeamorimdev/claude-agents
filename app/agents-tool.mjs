@@ -338,7 +338,8 @@ export function makeSelfHandlers(ctx) {
     request_takeover: async ({ reason }, extra) => {
       let r;
       try { r = await ctx.askHuman({ kind: "takeover", title: reason, signal: extra?.signal }); } catch (e) { return text(e.message, true); }
-      if (r.status === "done") return text(`The human handed your browser back${r.note ? `: "${r.note}"` : ""}. Take a new snapshot and carry on.`);
+      if (r.status === "done") return text(`The human handed your browser back${r.note ? `: "${r.note}"` : ""}. Take a new snapshot and carry on: ` +
+        "if they took it by hand your browser restarted, so if the page is blank open it again (what they signed in to is kept).");
       if (r.status === "denied") return text(`The human couldn't do it${r.note ? `: "${r.note}"` : ""}. Stop and tell them where you got to.`);
       return text("The human didn't take over in time. Stop and tell them what they need to do in your browser.");
     },
